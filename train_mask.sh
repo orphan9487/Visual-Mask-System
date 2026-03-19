@@ -1,0 +1,18 @@
+accelerate launch train_text_to_image_lora.py \
+  --pretrained_model_name_or_path="runwayml/stable-diffusion-v1-5" \
+  --dataset_name="./data/train_dataset" \
+  --caption_column="text" \
+  --resolution=512 \
+  --random_flip \
+  --train_batch_size=1 \
+  --num_train_epochs=100 \
+  --checkpointing_steps=500 \
+  --learning_rate=1e-04 \
+  --lr_scheduler="cosine" \
+  --lr_warmup_steps=0 \
+  --seed=42 \
+  --output_dir="./models/ethan_mask_lora" \
+  --validation_prompt="a photo of ethan_mask, smiling, cinematic lighting" \
+  --report_to="tensorboard" \
+  --mixed_precision="fp16" \
+  --gradient_checkpointing
