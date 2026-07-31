@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.conda/
+
+# Secrets / local settings
+.env
+.env.*
+!.env.example
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Generated outputs and logs
+output/
+logs/
+*.log
+
+# Models, LoRA weights, training checkpoints
+models/*
+!models/README.md
+!models/.gitkeep
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.onnx
+checkpoint-*/
+checkpoints/
+
+# Local datasets and uploaded personal images
+data/raw_images/
+data/train/
+data/processed/
+*.zip
+*.tar
+*.tar.gz
+
+# Kohya / TensorBoard training artifacts
+runs/
+wandb/
