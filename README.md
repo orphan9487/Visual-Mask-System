@@ -1,0 +1,53 @@
+# Visual Mask System
+
+這個分支是系統的純 WebSocket 基線。瀏覽器透過 FastAPI WebSocket 傳送訊息，系統即時完成情緒推論、建立 VisualInstruction，再由 LoRA 生成圖片或影片。執行期不包含 LINE Bot、LINE webhook 或 LINE SDK。
+
+## 架構
+
+```text
+index.html
+   │ WebSocket /ws/{client_name}
+   ▼
+src/interfaces/websocket_app.py
+   │
+   ▼
+src/services/pipeline_service.py
+   ├─ emotion_service.py          情緒與意圖推論
+   └─ instruction_runner.py       LoRA 圖片／影片生成
+```
+
+`PipelineService` 不依賴 WebSocket。日後比賽需要接 LINE 或其他 Hugging Face 系統時，應新增介面 adapter 呼叫同一個 service，不要把平台邏輯寫進推論或生成層。
+
+## 啟動
+
+1. 建立環境並安裝套件：
+
+   ```powershell
+   pip install -r requirements.txt
+   ```
+
+2. 依需要設定資料庫並初始化：
+
+   ```powershell
+   python scripts/database/init_db.py
+   ```
+
+3. 啟動 WebSocket 伺服器：
+
+   ```powershell
+   python chat_server.py
+   ```
+
+4. 開啟 `http://127.0.0.1:8000`。健康檢查位於 `http://127.0.0.1:8000/health`。
+
+也可以用 `python main.py "訊息" --mask human` 從命令列直接驗證完整推論與生成流程。
+
+## 測試
+
+不載入模型的核心流程單元測試：
+
+```powershell
+python tests/test_pipeline_service.py
+```
+
+GPU 生成檢查集中在 `tests/manual_*.py`，不會被一般測試探索自動執行。生成檔統一寫入 `output/current/`。

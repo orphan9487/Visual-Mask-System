@@ -23,7 +23,11 @@ env/
 Thumbs.db
 
 # Generated outputs and logs
-output/
+output/*
+!output/README.md
+!output/current/
+output/current/*
+!output/current/.gitkeep
 logs/
 *.log
 

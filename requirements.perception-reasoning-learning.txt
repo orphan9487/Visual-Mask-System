@@ -1,0 +1,47 @@
+# Visual Mask System — 完整可執行環境 (RTX 4070 / CUDA)
+# 建立方式：
+#   py -3.12 -m venv .venv
+#   .venv\Scripts\python -m pip install -U pip wheel setuptools
+#   .venv\Scripts\python -m pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+#   .venv\Scripts\python -m pip install -r requirements.txt
+#
+# 說明：torch 系列必須從上面的 cu124 index 安裝（PyPI 版是 CPU-only），故不列於此檔。
+
+# --- 核心：推理層 (LLM / ERC) ---
+transformers==4.47.1
+accelerate==1.2.1
+peft==0.14.0
+datasets==3.2.0
+sentencepiece
+protobuf
+scikit-learn          # Weighted-F1 / Macro-F1 評估指標
+opencc-python-reimplemented   # 簡→繁字元轉換 (M3ED / CPED)
+
+# --- Breeze2 (InternVL 架構) 遠端程式碼所需 ---
+einops
+timm==1.0.12
+mtkresearch          # Breeze2 remote code 依賴 (MRPrompt 等)
+
+# --- 量化 (VRAM 受限，3B/7B 以 4-bit 載入) ---
+bitsandbytes==0.45.0
+
+# --- 生成層 (AnimateDiff + SD1.5 + LoRA) ---
+diffusers==0.32.2
+imageio
+imageio-ffmpeg
+
+# --- 影像 / 一致性評估 (第二層驗證) ---
+pillow
+opencv-python
+numpy<2.0
+
+# --- WebSocket 服務層與外部 HTTP 整合 ---
+fastapi
+uvicorn[standard]
+httpx
+
+# --- 輸入感知層（多模態：emoji/貼圖）---
+emoji
+
+# --- 工具 ---
+tqdm
