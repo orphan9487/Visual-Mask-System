@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
-generate_tech_doc.py — Visual Mask System 技術說明文件生成器
+generate_legacy_tech_doc.py — 舊競賽技術說明文件生成器
+
+此檔只為重建歷史 PDF；內容描述已移除的 reasoning_engine.py 與早期元件，
+不代表目前純 WebSocket 架構。現行架構請以根目錄 README 為準。
 
 包含以下章節：
   1. 連線架構（TCP/TLS → WebSocket 流程）

@@ -1,0 +1,15 @@
+-r requirements.txt
+
+# Dataset preparation, ERC training, and evaluation
+datasets==3.2.0
+scikit-learn
+opencc-python-reimplemented
+opencv-python
+numpy<2.0
+tqdm
+
+# Breeze2 remote-code and 4-bit inference dependencies
+einops
+timm==1.0.12
+mtkresearch
+bitsandbytes==0.45.0

@@ -20,13 +20,17 @@ src/services/pipeline_service.py
 
 ## 啟動
 
-1. 建立環境並安裝套件：
+1. 建立環境並安裝套件。RTX 4070／CUDA 12.4 使用：
 
    ```powershell
-   pip install -r requirements.txt
+   pip install -r requirements-cuda.txt
    ```
 
-2. 依需要設定資料庫並初始化：
+   不需要 GPU 的 WebSocket／測試環境可使用 `requirements-dev.txt`；訓練與評估工具
+   使用 `requirements-training.txt`。單獨安裝 `requirements.txt` 可能取得 CPU 版 Torch，
+   因此不適合執行 LoRA 生成。
+
+2. 複製 `.env.example` 為 `.env`，填入 `VMS_DB_*` 資料庫連線設定，然後初始化：
 
    ```powershell
    python scripts/database/init_db.py
