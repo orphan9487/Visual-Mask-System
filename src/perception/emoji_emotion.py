@@ -18,25 +18,32 @@ import emoji as emoji_lib
 from ..reasoning.labels import CANONICAL_EMOTIONS
 
 # 常見 emoji → canonical 情緒。涵蓋高頻情緒表情；未列入者忽略（不硬猜）。
+# 價性曖昧者（如 🫠、😅、😮‍💨、😏）刻意不列，避免脫離語境誤判。
 EMOJI_EMOTION = {
     # joy
     "😂": "joy", "🤣": "joy", "😄": "joy", "😁": "joy", "😊": "joy", "😃": "joy",
     "🥳": "joy", "🎉": "joy", "😆": "joy", "😍": "joy", "🥰": "joy", "❤️": "joy",
     "👍": "joy", "✨": "joy", "😌": "joy", "😻": "joy",
+    "😀": "joy", "🙌": "joy", "🤗": "joy", "😎": "joy", "💕": "joy", "💗": "joy", "💖": "joy",
     # sadness
     "😢": "sadness", "😭": "sadness", "😥": "sadness", "😔": "sadness", "😞": "sadness",
     "💔": "sadness", "🥺": "sadness", "😿": "sadness", "😩": "sadness",
+    "🥲": "sadness", "😓": "sadness", "😫": "sadness", "🙁": "sadness", "☹️": "sadness",
     # anger
     "😡": "anger", "😠": "anger", "🤬": "anger", "👿": "anger", "💢": "anger",
+    "😤": "anger", "🖕": "anger",
     # surprise
     "😲": "surprise", "😮": "surprise", "😯": "surprise", "😱": "surprise",
     "🤯": "surprise", "😳": "surprise", "‼️": "surprise", "❓": "surprise",
+    "😵": "surprise", "🙀": "surprise",
     # fear
     "😨": "fear", "😰": "fear", "😧": "fear", "😦": "fear",
     # disgust
     "🤢": "disgust", "🤮": "disgust", "😖": "disgust", "😬": "disgust",
+    "🙄": "disgust", "😒": "disgust",
     # neutral
     "😐": "neutral", "😑": "neutral", "🙂": "neutral", "😶": "neutral",
+    "🤔": "neutral",
 }
 
 

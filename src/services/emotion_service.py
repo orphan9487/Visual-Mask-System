@@ -82,11 +82,36 @@ def _predict_sync(text: str, history: list[dict]) -> dict:
                 "rationale": f"(fallback: {type(e).__name__})", "source": "fallback"}
 
 
-async def predict_emotion(text: str, history: list[dict]) -> dict:
+async def predict_emotion_local(text: str, history: list[dict]) -> dict:
     """
     非同步介面：把同步的模型推理丟到執行緒，避免阻塞 event loop。
     """
     return await asyncio.to_thread(_predict_sync, text, history)
+
+
+async def predict_emotion(text: str, history: list[dict]) -> dict:
+    """Use the isolated ERC service when configured, otherwise infer locally."""
+    if not config.EMOTION_API_URL:
+        return await predict_emotion_local(text, history)
+
+    from .emotion_inference_client import (
+        RemoteEmotionInferenceError,
+        predict_remote,
+    )
+
+    try:
+        return await predict_remote(
+            text,
+            history,
+            base_url=config.EMOTION_API_URL,
+            token=config.EMOTION_API_TOKEN,
+            timeout=config.EMOTION_API_TIMEOUT,
+        )
+    except RemoteEmotionInferenceError as exc:
+        if not config.EMOTION_API_FALLBACK_LOCAL:
+            raise
+        print(f"[erc][warn] remote inference unavailable; using local fallback: {exc}")
+        return await predict_emotion_local(text, history)
 
 
 _intent_decoder = None

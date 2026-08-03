@@ -1,0 +1,15 @@
+# Dependency-isolated ERC runtime based on the teammate handoff package.
+# PyTorch/CUDA is intentionally installed separately; see the integration guide.
+transformers==4.47.1
+accelerate==1.2.1
+peft==0.14.0
+bitsandbytes==0.45.0
+sentencepiece
+protobuf
+einops
+timm==1.0.12
+mtkresearch
+fastapi
+uvicorn[standard]
+python-dotenv
+emoji

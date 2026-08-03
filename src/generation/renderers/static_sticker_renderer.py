@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
+from typing import Any
 
 import torch
 from diffusers import AutoencoderKL, DDIMScheduler, StableDiffusionPipeline
@@ -14,6 +15,8 @@ from src.generation.renderers.base import GenerationRequest, RenderedFrames, Ren
 
 class StaticStickerRenderer(Renderer):
     """Generate a single PNG-quality frame without AnimateDiff motion blur."""
+
+    MAX_REJECTED_IMAGE_RETRIES = 2
 
     def __init__(self) -> None:
         print("[Diffusion] Loading SD1.5 static sticker pipeline...")
@@ -61,28 +64,79 @@ class StaticStickerRenderer(Renderer):
             adapter_weights=[float(identity.get("lora_weight", 0.8))],
         )
 
+    @staticmethod
+    def _safety_checker_rejected(result: Any) -> bool:
+        detected = getattr(result, "nsfw_content_detected", None)
+        if detected is None:
+            return False
+        if isinstance(detected, (list, tuple)):
+            return any(bool(value) for value in detected)
+        return bool(detected)
+
+    @staticmethod
+    def _is_black_image(image: Any) -> bool:
+        """Treat an all-black/near-black safety placeholder as invalid output."""
+        try:
+            extrema = image.convert("RGB").getextrema()
+        except (AttributeError, TypeError, ValueError):
+            return False
+        return bool(extrema) and all(channel_max <= 1 for _, channel_max in extrema)
+
     def render(self, request: GenerationRequest) -> RenderedFrames:
         self._load_lora(request.identity)
         seed = request.seed if request.seed is not None else random.randint(0, 1_000_000)
-        generator = torch.Generator(device="cuda").manual_seed(seed)
 
         original_decode = self.pipe.vae.decode
+        decode_dtype = next(
+            self.pipe.vae.post_quant_conv.parameters()
+        ).dtype
 
-        def fp32_decode(latents, **kwargs):
-            return original_decode(latents.to(dtype=torch.float32), **kwargs)
+        def dtype_safe_decode(latents, **kwargs):
+            return original_decode(latents.to(dtype=decode_dtype), **kwargs)
 
-        self.pipe.vae.decode = fp32_decode
+        self.pipe.vae.decode = dtype_safe_decode
         try:
-            with torch.inference_mode():
-                image = self.pipe(
-                    prompt=request.prompt,
-                    negative_prompt=request.negative_prompt,
-                    num_inference_steps=request.num_inference_steps,
-                    guidance_scale=request.guidance_scale,
-                    width=request.width,
-                    height=request.height,
-                    generator=generator,
-                ).images[0]
+            for attempt in range(self.MAX_REJECTED_IMAGE_RETRIES + 1):
+                if attempt:
+                    previous_seed = seed
+                    while seed == previous_seed:
+                        seed = random.randint(0, 1_000_000)
+                generator = torch.Generator(device="cuda").manual_seed(seed)
+                with torch.inference_mode():
+                    result = self.pipe(
+                        prompt=request.prompt,
+                        negative_prompt=request.negative_prompt,
+                        num_inference_steps=request.num_inference_steps,
+                        guidance_scale=request.guidance_scale,
+                        width=request.width,
+                        height=request.height,
+                        generator=generator,
+                    )
+                image = result.images[0]
+                rejected_by_safety = self._safety_checker_rejected(result)
+                black_image = self._is_black_image(image)
+                if not rejected_by_safety and not black_image:
+                    return RenderedFrames(frames=[image], seed=seed)
+
+                reasons = []
+                if rejected_by_safety:
+                    reasons.append("safety checker")
+                if black_image:
+                    reasons.append("black image")
+                retry_status = (
+                    f"retry {attempt + 1}/{self.MAX_REJECTED_IMAGE_RETRIES}"
+                    if attempt < self.MAX_REJECTED_IMAGE_RETRIES
+                    else "no retries left"
+                )
+                print(
+                    "[Diffusion] Rejected static image "
+                    f"(seed={seed}, reason={'+'.join(reasons)}); {retry_status}.",
+                    flush=True,
+                )
+
+            raise RuntimeError(
+                "SD1.5 returned a safety-rejected or black image after "
+                f"{self.MAX_REJECTED_IMAGE_RETRIES + 1} attempts."
+            )
         finally:
             self.pipe.vae.decode = original_decode
-        return RenderedFrames(frames=[image], seed=seed)

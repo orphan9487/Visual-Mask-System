@@ -121,6 +121,7 @@ class PipelineService:
         analysis: PipelineAnalysis,
         *,
         intensity_multiplier: float = 1.0,
+        force_modality: str | None = None,
     ) -> PipelineResult:
         instruction = copy.deepcopy(analysis.instruction)
         base_intensity = analysis.base_intensity
@@ -129,7 +130,11 @@ class PipelineService:
         instruction["intensity"] = effective_intensity
 
         # Keep modality and renderer hints consistent with the adjusted value.
-        modality = "video" if effective_intensity >= 0.6 else "sticker"
+        if force_modality not in (None, "video", "sticker"):
+            raise ValueError("force_modality must be 'video', 'sticker', or None")
+        modality = force_modality or (
+            "video" if effective_intensity >= 0.6 else "sticker"
+        )
         instruction["modality"] = modality
         hints = instruction.setdefault("generation_hints", {})
         hints["num_frames"] = 16 if modality == "video" else 1

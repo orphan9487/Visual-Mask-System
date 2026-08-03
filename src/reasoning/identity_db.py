@@ -73,7 +73,9 @@ _DEFAULT_MASKS = {
         mask_id="ethan",
         trigger="ethan_mask",
         base_prompt="1boy, masculine, a portrait of Ethan, realistic skin",
-        lora_path="models/ethan_mask_lora/pytorch_lora_weights.safetensors",
+        # The original export contains torch.compile ``_orig_mod`` prefixes;
+        # use the normalized Diffusers-compatible copy for inference.
+        lora_path="models/ethan_mask_lora/pytorch_lora_weights_fixed.safetensors",
         lora_weight=0.8,
         display_name="Ethan",
     ),

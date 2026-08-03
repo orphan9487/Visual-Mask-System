@@ -25,3 +25,11 @@ ERC_QUANT = (
     if _quantization in ("", "none", "fp16", "float16", "no")
     else _quantization
 )
+
+# Optional dependency-isolated ERC service. Empty means in-process inference.
+EMOTION_API_URL = os.getenv("VMS_EMOTION_API_URL", "").strip().rstrip("/")
+EMOTION_API_TOKEN = os.getenv("VMS_EMOTION_API_TOKEN", "").strip()
+EMOTION_API_TIMEOUT = float(os.getenv("VMS_EMOTION_API_TIMEOUT", "120"))
+EMOTION_API_FALLBACK_LOCAL = (
+    os.getenv("VMS_EMOTION_API_FALLBACK", "local").strip().lower() == "local"
+)
