@@ -43,7 +43,11 @@ EMOTION_PROFILE = {
     "anger":    ("angry expression, furrowed brows, clenched jaw, intense glare, frowning", 0.90),
     "joy":      ("happy bright smile, sparkling eyes, cheerful expression", 0.80),
     "surprise": ("surprised expression, wide eyes, raised eyebrows, slightly open mouth", 0.80),
-    "fear":     ("fearful expression, tense face, wide worried eyes", 0.75),
+    "fear":     (
+        "(terrified face:1.5), (wide-open eyes, white sclera:1.7), "
+        "raised eyebrows, screaming, dropped jaw",
+        0.75,
+    ),
     "disgust":  ("disgusted expression, wrinkled nose, curled upper lip", 0.60),
     "sadness":  ("sad expression, downcast teary eyes, drooping mouth, sorrowful", 0.60),
     "neutral":  ("calm relaxed neutral expression", 0.30),
@@ -56,8 +60,8 @@ DEFAULT_NEGATIVE = ("blurry eyes, deformed iris, hazy, low quality, "
                     "black and white, monochrome, grayscale, desaturated, "
                     "sepia, muted colors")
 
-COLOR_PHOTO_STYLE = ("full-color color photograph, natural skin tones, "
-                     "natural color saturation, realistic indoor lighting")
+COLOR_PHOTO_STYLE = ("realistic color photo, natural skin tones, "
+                     "soft indoor lighting")
 
 HENRY_NEGATIVE = ("bald, receding hairline, gray hair, white hair, "
                   "elderly, old man")
@@ -117,11 +121,17 @@ class VisualInstructionGenerator:
         return (f"A portrait of {mask.trigger} person showing {expression}, "
                 f"{motion}, vivid lighting, masterpiece, high quality, highly detailed.")
 
-    def _positive_prompt(self, mask: MaskIdentity, expression: str) -> str:
-        # 沿用專案既有生成慣例：身分在前、情緒以權重強化(:1.3)壓過身分中性傾向
+    def _positive_prompt(self, mask: MaskIdentity, expression: str,
+                         emotion: str) -> str:
+        # Fear spends the limited CLIP token budget on its clearest cue: eyes.
+        # Other emotions keep the shared expression weighting.
+        if emotion == "fear":
+            # Put fear before identity so SD1.5 does not dilute the expression.
+            return (f"{mask.trigger}, {expression}, {mask.base_prompt}, "
+                    f"{COLOR_PHOTO_STYLE}")
+        weighted_expression = f"({expression}:1.3)"
         return (f"{mask.trigger}, {mask.base_prompt}, "
-                f"({expression}:1.3), vivid lighting, masterpiece, "
-                f"high quality, highly detailed, {COLOR_PHOTO_STYLE}")
+                f"{weighted_expression}, {COLOR_PHOTO_STYLE}")
 
     def generate(self, emotion: str, *, user_id: Optional[str] = None,
                  mask_id: Optional[str] = None, intensity: Optional[float] = None,
@@ -144,6 +154,8 @@ class VisualInstructionGenerator:
             "width": 384,
             "height": 512,
         }
+        if mask.generation_seed is not None:
+            hints["seed"] = int(mask.generation_seed)
 
         negative_prompt = DEFAULT_NEGATIVE
         if mask.mask_id == "henry":
@@ -159,7 +171,7 @@ class VisualInstructionGenerator:
             intensity=round(intensity, 3),
             modality=modality,
             scene_description=self._scene_description(mask, expression, modality),
-            positive_prompt=self._positive_prompt(mask, expression),
+            positive_prompt=self._positive_prompt(mask, expression, emotion),
             negative_prompt=negative_prompt,
             generation_hints=hints,
             source={"utterance": utterance, "rationale": rationale[:300]},

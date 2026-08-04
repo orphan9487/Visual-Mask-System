@@ -140,6 +140,12 @@ class InstructionGenerationRunner:
             "width": int(hints.get("width", 384)),
             "height": int(hints.get("height", 512)),
         }
+        if hints.get("seed") is not None:
+            normalised_hints["seed"] = int(hints["seed"])
+            if normalised_hints["seed"] < 0:
+                raise InstructionValidationError(
+                    "'generation_hints.seed' must not be negative."
+                )
         if normalised_hints["num_frames"] < 1:
             raise InstructionValidationError("'generation_hints.num_frames' must be at least 1.")
         if (normalised_hints["width"] < 64 or normalised_hints["height"] < 64
@@ -208,7 +214,8 @@ class InstructionGenerationRunner:
             guidance_scale=hints["guidance_scale"],
             width=hints["width"],
             height=hints["height"],
-            seed=overrides.seed,
+            seed=(overrides.seed if overrides.seed is not None
+                  else hints.get("seed")),
         ))
         frames, seed = rendered.frames, rendered.seed
 

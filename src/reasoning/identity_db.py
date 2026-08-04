@@ -28,6 +28,7 @@ class MaskIdentity:
     lora_path: str               # LoRA 權重相對路徑
     lora_weight: float = 0.8     # LoRA 融合權重（身分↔表情的取捨）
     display_name: str = ""       # 可讀名稱
+    generation_seed: Optional[int] = None
 
 
 # 預設面具庫（沿用專案既有的 person8692 人物 LoRA；日後每位使用者可註冊自己的）
@@ -61,13 +62,13 @@ _DEFAULT_MASKS = {
         mask_id="henry",
         trigger="henrymask",
         base_prompt=(
-            "young adult man, black hair, round glasses, realistic skin, detailed black hair, "
-            "(medium shot, upper body portrait:1.35), "
-            "(head and shoulders fully in frame, entire head visible:1.35), centered face"
+            "young adult man, black hair, round glasses, realistic skin, "
+            "front-facing head-and-shoulders portrait, entire head visible, centered face"
         ),
         lora_path="models/henry_mask_lora/henrymask_v3.safetensors",
         lora_weight=0.8,
         display_name="Henry",
+        generation_seed=314159,
     ),
     "ethan": MaskIdentity(
         mask_id="ethan",

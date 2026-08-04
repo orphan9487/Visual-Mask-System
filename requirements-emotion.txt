@@ -1,6 +1,11 @@
 # Dependency-isolated ERC runtime based on the teammate handoff package.
 # PyTorch/CUDA is intentionally installed separately; see the integration guide.
-transformers==4.47.1
+# Breeze2's InternVL remote config raises KeyError('architectures') on 4.47.x.
+# The model maintainer's documented compatibility workaround is 4.44.2.
+transformers==4.44.2
+# Keep the inherited datasets installation compatible when this venv uses
+# --system-site-packages.
+fsspec==2026.2.0
 accelerate==1.2.1
 peft==0.14.0
 bitsandbytes==0.45.0

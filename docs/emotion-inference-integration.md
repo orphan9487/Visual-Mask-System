@@ -11,7 +11,9 @@ VisualInstruction 與 LoRA 圖片生成仍由主程式負責。
 
 ## 建立環境
 
-交接包使用 transformers 4.47.1，而主環境使用 5.x，因此不可覆蓋主環境套件。
+交接包原先使用 transformers 4.47.1，但 Breeze2 的 InternVL remote config 會觸發
+`KeyError: 'architectures'`。情緒服務固定使用已驗證的 4.44.2；主環境使用不同
+版本，因此不可覆蓋主環境套件。
 
 ```powershell
 C:\Users\User\anaconda3\envs\mask_env\python.exe -m venv --system-site-packages .venv-erc

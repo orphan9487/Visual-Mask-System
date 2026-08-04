@@ -92,7 +92,28 @@ class Backbone:
             common["torch_dtype"] = dtype
 
         loader = AutoModel if self.is_internvl else AutoModelForCausalLM
-        self.model = loader.from_pretrained(self.model_id, **common)
+        if quant is not None and self.is_internvl:
+            # Breeze2 is a remote-code composite model. Transformers 4.44.2
+            # correctly loads its config, but does not expose the outer model's
+            # 4-bit marker early enough for Accelerate. On a single GPU,
+            # Accelerate then calls model.to(), which quantized models reject.
+            # Force dispatch hooks only for this load and restore the library
+            # function immediately afterwards.
+            import transformers.modeling_utils as modeling_utils
+
+            original_dispatch = modeling_utils.dispatch_model
+
+            def dispatch_quantized_with_hooks(model, *args, **kwargs):
+                kwargs["force_hooks"] = True
+                return original_dispatch(model, *args, **kwargs)
+
+            modeling_utils.dispatch_model = dispatch_quantized_with_hooks
+            try:
+                self.model = loader.from_pretrained(self.model_id, **common)
+            finally:
+                modeling_utils.dispatch_model = original_dispatch
+        else:
+            self.model = loader.from_pretrained(self.model_id, **common)
 
         if quant is None and self.cfg.device == "cuda":
             self.model = self.model.to("cuda")
