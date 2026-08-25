@@ -24,3 +24,6 @@ imageio
 imageio-ffmpeg
 sentencepiece
 protobuf
+
+# Line Bot
+line-bot-sdk==3.25.0
