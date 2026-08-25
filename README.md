@@ -1,6 +1,25 @@
 # Visual Mask System
 
-這個分支是系統的純 WebSocket 基線。瀏覽器透過 FastAPI WebSocket 傳送訊息，系統即時完成情緒推論、建立 VisualInstruction，再由 LoRA 生成圖片或影片。執行期不包含 LINE Bot、LINE webhook 或 LINE SDK。
+單一 codebase，兩個變體，靠設定檔切換（不再分支分叉）：
+
+| 變體 | `VMS_PROFILE` | 前端 | Talking face / TTS |
+| --- | --- | --- | --- |
+| 校內專題版 | `thesis`（預設） | 自製 WebSocket 聊天室 | 關 |
+| 競賽版 | `competition` | LINE Messaging webhook | 開 |
+
+共同核心（情緒推論、VisualInstruction、LoRA 生成）兩版共用一份。LINE、talking face、TTS 都是可選模組，由 `src/config/features.py` 依 `VMS_PROFILE` 決定是否載入——`thesis` 模式完全不會 import `line_webhook`，因此不需要 `line-bot-sdk` 或 LINE 憑證即可啟動。
+
+## 切換變體
+
+複製對應的設定範本為 `.env`：
+
+```powershell
+copy .env.thesis.example .env        # 校內版：自製聊天室
+# 或
+copy .env.competition.example .env   # 競賽版：LINE + talking face
+```
+
+也可在既有 `.env` 裡單獨覆寫：`VMS_ENABLE_LINE`、`VMS_ENABLE_TALKING_FACE`、`VMS_ENABLE_TTS`（值 `0`/`1`）。
 
 ## 架構
 
@@ -30,7 +49,7 @@ src/services/pipeline_service.py
    使用 `requirements-training.txt`。單獨安裝 `requirements.txt` 可能取得 CPU 版 Torch，
    因此不適合執行 LoRA 生成。
 
-2. 複製 `.env.example` 為 `.env`，填入 `VMS_DB_*` 資料庫連線設定，然後初始化：
+2. 依變體複製設定範本為 `.env`（見上方「切換變體」），填入 `VMS_DB_*` 資料庫連線設定（競賽版另需 `LINE_*` 憑證），然後初始化：
 
    ```powershell
    python scripts/database/init_db.py

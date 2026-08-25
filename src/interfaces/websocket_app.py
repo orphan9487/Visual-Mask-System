@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.config import inference as inference_config
+from src.config import features
 from pydantic import BaseModel
 
 from db.feedback_repo import (
@@ -24,7 +25,6 @@ from db.feedback_repo import (
 from db.lora_repo import get_user_active_lora, get_user_loras, set_user_active_lora
 from db.user_repo import verify_login
 from src.reasoning.identity_db import identity_db
-from src.interfaces.line_webhook import router as line_router
 from src.services.pipeline_service import PipelineAnalysis, PipelineService, pipeline
 
 
@@ -116,7 +116,13 @@ def create_app(pipeline_service: PipelineService = pipeline) -> FastAPI:
         allow_headers=["*"],
     )
     app.mount("/output", StaticFiles(directory=str(OUTPUT_ROOT)), name="output")
-    app.include_router(line_router)
+
+    # The LINE webhook (and its line-bot-sdk dependency) only loads for the
+    # competition profile; the thesis profile runs WebSocket-chat-only.
+    if features.LINE_ENABLED:
+        from src.interfaces.line_webhook import router as line_router
+
+        app.include_router(line_router)
 
     manager = ConnectionManager()
     histories: dict[str, deque[dict[str, str]]] = {}
