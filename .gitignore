@@ -58,3 +58,6 @@ wandb/
 
 # TensorBoard event logs
 *.tfevents.*
+
+# Large training datasets (kept in history, not tracked going forward)
+data/train_dataset_v2/
