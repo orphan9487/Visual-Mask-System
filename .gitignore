@@ -55,3 +55,6 @@ data/processed/
 # Kohya / TensorBoard training artifacts
 runs/
 wandb/
+
+# TensorBoard event logs
+*.tfevents.*
