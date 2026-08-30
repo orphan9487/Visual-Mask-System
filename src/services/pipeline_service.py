@@ -58,6 +58,18 @@ class PipelineAnalysis:
     def mask_id(self) -> str:
         return str(self.instruction.get("identity", {}).get("mask_id", "human"))
 
+    @property
+    def emotions(self) -> list[dict[str, Any]]:
+        """呈現用的情緒集合（單一或主/次）；缺欄位時退回單一情緒。"""
+        got = self.payload.get("emotions")
+        if got:
+            return got
+        return [{"emotion": self.emotion, "role": "primary", "source": "text"}]
+
+    @property
+    def compound_name(self) -> str | None:
+        return self.payload.get("compound_name")
+
 
 @dataclass(frozen=True)
 class PipelineResult:

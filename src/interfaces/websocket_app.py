@@ -103,6 +103,8 @@ def _public_analysis_payload(
         "mask_file": None,
         "status": "generating",
         "base_intensity": analysis.base_intensity,
+        "emotions": analysis.emotions,
+        "compound_name": analysis.compound_name,
     }
 
 

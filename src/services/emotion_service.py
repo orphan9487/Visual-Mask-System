@@ -174,9 +174,15 @@ async def produce_visual_instruction(text: str, history: list[dict],
     vi = vig.generate(final_emotion, user_id=user_id, mask_id=mask_id,
                       utterance=text, rationale=result.get("rationale", ""),
                       intent=intent)
+    fusion_dict = fused.to_dict()
+    from ..reasoning.compound import resolve_emotions
+    compound = resolve_emotions(fusion_dict)
     return {"emotion": final_emotion, "text_emotion": result["emotion"],
             "parse_ok": result.get("parse_ok"),
-            "fusion": fused.to_dict(), "intent": intent, "instruction": vi.to_dict()}
+            "fusion": fusion_dict,
+            "emotions": compound["emotions"],
+            "compound_name": compound["compound_name"],
+            "intent": intent, "instruction": vi.to_dict()}
 
 
 def is_ready() -> bool:
