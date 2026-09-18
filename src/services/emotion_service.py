@@ -44,9 +44,12 @@ def _get_engine():
                 from ..reasoning.backbone import Backbone, BackboneConfig
                 from ..reasoning.erc_engine import ERCEngine
 
-                print(f"[erc] 載入模型 {config.ERC_MODEL} (quant={config.ERC_QUANT})…")
+                lora = config.LORA_PATH or None
+                print(f"[erc] 載入模型 {config.ERC_MODEL} (quant={config.ERC_QUANT}"
+                      + (f", lora={lora}" if lora else "") + ")…")
                 bk = Backbone(BackboneConfig(model=config.ERC_MODEL,
-                                             quantization=config.ERC_QUANT))
+                                             quantization=config.ERC_QUANT,
+                                             lora_path=lora))
                 _engine = ERCEngine(bk, use_context=True, two_stage=True)
                 print("[erc] 模型就緒")
     return _engine
