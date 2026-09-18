@@ -1,0 +1,51 @@
+{
+  "version": "henry_liveportrait_v1",
+  "mask_id": "henry",
+  "source": "resources/henry_liveportrait_v1/source.png",
+  "local_eye_correction": {
+    "eye": "subject-right",
+    "lift_px": 3.0,
+    "radius_x": 62.0,
+    "radius_y": 38.0,
+    "baked_into_source": true
+  },
+  "animation_region": "exp",
+  "driving_option": "expression-friendly",
+  "profiles": {
+    "neutral": {
+      "template": "resources/henry_liveportrait_v1/templates/neutral.pkl",
+      "cache": "resources/henry_liveportrait_v1/cache/neutral.jpg",
+      "multiplier": 0.8
+    },
+    "joy": {
+      "template": "resources/henry_liveportrait_v1/templates/joy.pkl",
+      "cache": "resources/henry_liveportrait_v1/cache/joy.jpg",
+      "multiplier": 0.8
+    },
+    "sadness": {
+      "template": "resources/henry_liveportrait_v1/templates/sadness.pkl",
+      "cache": "resources/henry_liveportrait_v1/cache/sadness.jpg",
+      "multiplier": 1.0
+    },
+    "anger": {
+      "template": "resources/henry_liveportrait_v1/templates/anger.pkl",
+      "cache": "resources/henry_liveportrait_v1/cache/anger.jpg",
+      "multiplier": 1.0
+    },
+    "surprise": {
+      "template": "resources/henry_liveportrait_v1/templates/surprise.pkl",
+      "cache": "resources/henry_liveportrait_v1/cache/surprise.jpg",
+      "multiplier": 1.2
+    },
+    "fear": {
+      "template": "resources/henry_liveportrait_v1/templates/fear.pkl",
+      "cache": "resources/henry_liveportrait_v1/cache/fear.jpg",
+      "multiplier": 1.0
+    },
+    "disgust": {
+      "template": "resources/henry_liveportrait_v1/templates/disgust.pkl",
+      "cache": "resources/henry_liveportrait_v1/cache/disgust.jpg",
+      "multiplier": 1.0
+    }
+  }
+}

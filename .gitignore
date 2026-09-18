@@ -62,3 +62,15 @@ wandb/
 
 # Large training datasets (kept in history, not tracked going forward)
 data/train_dataset_v2/
+
+# Office 暫存鎖檔 / 暫存
+~$*
+*.tmp
+
+# 大型資料集與生成樣本（不進版控）
+external_stage2_dataset.jsonl
+external/
+resources/
+tmp/
+/*.png
+/*.gif
