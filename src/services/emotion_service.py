@@ -60,7 +60,7 @@ MAX_INPUT_CHARS = 500
 _engine_broken = False
 
 
-def _predict_sync(text: str, history: list[dict]) -> dict:
+def _predict_sync(text: str, history: list[dict], speaker_prior: str | None = None) -> dict:
     global _engine_broken
     text = (text or "")[:MAX_INPUT_CHARS]
 
@@ -72,7 +72,7 @@ def _predict_sync(text: str, history: list[dict]) -> dict:
     # 真實推理：任何失敗（OOM/逾時/載入錯誤）都退回關鍵字規則，確保永不當機
     try:
         engine = _get_engine()
-        res = engine.predict(text, history=history)
+        res = engine.predict(text, history=history, speaker_prior=speaker_prior)
         return {"emotion": res.predicted or "neutral", "rationale": res.rationale,
                 "parse_ok": res.parse_ok, "source": "llm"}
     except Exception as e:  # noqa: BLE001
@@ -85,17 +85,17 @@ def _predict_sync(text: str, history: list[dict]) -> dict:
                 "rationale": f"(fallback: {type(e).__name__})", "source": "fallback"}
 
 
-async def predict_emotion_local(text: str, history: list[dict]) -> dict:
+async def predict_emotion_local(text: str, history: list[dict], speaker_prior: str | None = None) -> dict:
     """
     非同步介面：把同步的模型推理丟到執行緒，避免阻塞 event loop。
     """
-    return await asyncio.to_thread(_predict_sync, text, history)
+    return await asyncio.to_thread(_predict_sync, text, history, speaker_prior)
 
 
-async def predict_emotion(text: str, history: list[dict]) -> dict:
+async def predict_emotion(text: str, history: list[dict], speaker_prior: str | None = None) -> dict:
     """Use the isolated ERC service when configured, otherwise infer locally."""
     if not config.EMOTION_API_URL:
-        return await predict_emotion_local(text, history)
+        return await predict_emotion_local(text, history, speaker_prior)
 
     from .emotion_inference_client import (
         RemoteEmotionInferenceError,
@@ -114,7 +114,7 @@ async def predict_emotion(text: str, history: list[dict]) -> dict:
         if not config.EMOTION_API_FALLBACK_LOCAL:
             raise
         print(f"[erc][warn] remote inference unavailable; using local fallback: {exc}")
-        return await predict_emotion_local(text, history)
+        return await predict_emotion_local(text, history, speaker_prior)
 
 
 _intent_decoder = None
@@ -155,11 +155,21 @@ async def produce_visual_instruction(text: str, history: list[dict],
     from ..reasoning.visual_instruction import visual_instruction_generator as vig
     from ..perception.multimodal_fusion import perceive
 
+    # 0. 線上個人化：把使用者的長期情緒先驗（由 👎 更正累積於 users.emotion_prior）
+    #    讀回，當 speaker_prior 影響本次判讀。讓回饋免重訓即刻生效（學習迴圈 Level 1）。
+    speaker_prior = None
+    if user_id and not config.MOCK_MODE:
+        try:
+            from db.user_repo import get_user_prior
+            speaker_prior = await asyncio.to_thread(get_user_prior, user_id)
+        except Exception as e:  # noqa: BLE001
+            print(f"[erc][warn] 讀取 speaker_prior 失敗，略過：{type(e).__name__}: {e}")
+
     # 1. 文字模態：剝除 emoji 後只看純文字，使兩模態乾淨分離
     #    （否則 LLM 逕自讀到 emoji，emoji 的貢獻會被藏進文字判讀裡）
     clean_text = emoji_lib.replace_emoji(text, "").strip()
     if clean_text:
-        result = await predict_emotion(clean_text, history)
+        result = await predict_emotion(clean_text, history, speaker_prior=speaker_prior)
     else:
         result = {"emotion": "neutral", "parse_ok": bool(text.strip()) is False, "rationale": ""}
 
