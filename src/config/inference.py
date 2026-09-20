@@ -26,14 +26,11 @@ ERC_QUANT = (
     else _quantization
 )
 
-# Optional dependency-isolated ERC service. Empty means in-process inference.
+# Optional dependency-isolated emotion service. Keeping this URL empty runs
+# Breeze2 in the WebSocket process exactly as before.
 EMOTION_API_URL = os.getenv("VMS_EMOTION_API_URL", "").strip().rstrip("/")
 EMOTION_API_TOKEN = os.getenv("VMS_EMOTION_API_TOKEN", "").strip()
 EMOTION_API_TIMEOUT = float(os.getenv("VMS_EMOTION_API_TIMEOUT", "120"))
 EMOTION_API_FALLBACK_LOCAL = (
     os.getenv("VMS_EMOTION_API_FALLBACK", "local").strip().lower() == "local"
 )
-
-# ERC LoRA adapter 路徑（離線重訓的成果）。留空＝跑純底座。
-# adapter 綁底座，必須與 VMS_MODEL 用同一顆基座訓練，否則載入會失敗或無效。
-LORA_PATH = os.getenv("VMS_LORA_PATH", "").strip()

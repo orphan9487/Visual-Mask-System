@@ -12,7 +12,10 @@ from .labels import CANONICAL_EMOTIONS
 LABEL_LINE = ", ".join(CANONICAL_EMOTIONS)
 
 
-def system_prompt(speaker_prior: str | None = None) -> str:
+def system_prompt(
+    speaker_prior: str | None = None,
+    correction_examples: list[dict] | None = None,
+) -> str:
     """ERC 系統提示。speaker_prior 只描述長期風格，不預設當前情緒。"""
     base = (
         "You are an expert annotator for Emotion Recognition in Conversation (ERC). "
@@ -29,6 +32,19 @@ def system_prompt(speaker_prior: str | None = None) -> str:
             "\n\n[Speaker Behavioral Prior] (long-term style only, NOT the current emotion): "
             + speaker_prior
         )
+    if correction_examples:
+        lines = []
+        for item in correction_examples[:5]:
+            text = str(item.get("text", ""))[:500]
+            label = str(item.get("correct_label", ""))
+            if text and label in CANONICAL_EMOTIONS:
+                lines.append(f"- {text!r} was corrected to {label}")
+        if lines:
+            base += (
+                "\n\n[Relevant user corrections] Use these annotations only when "
+                "they are linguistically relevant to the current utterance; do not "
+                "treat them as a default emotion:\n" + "\n".join(lines)
+            )
     return base
 
 

@@ -31,7 +31,25 @@ def analysis_payload(mask_id: str = "human") -> dict:
     }
 
 
+def compound_analysis_payload(mask_id: str = "human") -> dict:
+    payload = analysis_payload(mask_id)
+    payload["emotions"] = [
+        {"emotion": "anger", "role": "primary", "source": "context"},
+        {"emotion": "disgust", "role": "secondary", "source": "surface"},
+    ]
+    payload["compound_name"] = "輕蔑"
+    return payload
+
+
 class PipelineServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_analysis_exposes_compound_emotion_metadata(self):
+        analysis = PipelineAnalysis(
+            compound_analysis_payload(), "hello", [], "alice"
+        )
+
+        self.assertEqual(analysis.compound_name, "輕蔑")
+        self.assertEqual(len(analysis.emotions), 2)
+
     async def test_analyze_passes_identity_and_sanitizes_history(self):
         received = {}
 
@@ -81,26 +99,6 @@ class PipelineServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["modality"], "sticker")
         self.assertEqual(captured["generation_hints"]["num_frames"], 1)
 
-    async def test_generate_can_force_static_sticker_for_line(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            captured = {}
-
-            def generator(instruction):
-                captured.update(instruction)
-                path = root / "line-result.png"
-                path.write_bytes(b"image")
-                return str(path)
-
-            service = PipelineService(generator=generator, output_root=root)
-            analysis = PipelineAnalysis(
-                analysis_payload(), "hello", [], "alice"
-            )
-            await service.generate(analysis, force_modality="sticker")
-
-        self.assertEqual(captured["modality"], "sticker")
-        self.assertEqual(captured["generation_hints"]["num_frames"], 1)
-
     async def test_generation_lock_serializes_shared_renderer(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -146,6 +144,27 @@ class PipelineServiceTests(unittest.IsolatedAsyncioTestCase):
             )
             with self.assertRaisesRegex(RuntimeError, "escaped output/current"):
                 await service.generate(analysis)
+
+    async def test_faceid_identity_always_uses_still_image(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            captured = {}
+
+            def generator(instruction):
+                captured.update(instruction)
+                path = root / "faceid.png"
+                path.write_bytes(b"image")
+                return str(path)
+
+            payload = analysis_payload("henry")
+            payload["instruction"]["identity"]["mode"] = "faceid"
+            service = PipelineService(generator=generator, output_root=root)
+            await service.generate(
+                PipelineAnalysis(payload, "hello", [], "alice")
+            )
+
+        self.assertEqual(captured["modality"], "sticker")
+        self.assertEqual(captured["generation_hints"]["num_frames"], 1)
 
 
 if __name__ == "__main__":

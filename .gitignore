@@ -6,8 +6,8 @@ __pycache__/
 .mypy_cache/
 
 # Virtual environments
-.venv-erc/
 .venv/
+.venv-erc/
 venv/
 env/
 .conda/
@@ -45,10 +45,22 @@ models/*
 checkpoint-*/
 checkpoints/
 
+# Third-party runtime trees can be large. Keep only the minimal audited
+# IP-Adapter module used by the FaceID renderer.
+external/*
+!external/IP-Adapter/
+external/IP-Adapter/*
+!external/IP-Adapter/LICENSE
+!external/IP-Adapter/ip_adapter/
+!external/IP-Adapter/ip_adapter/*.py
+
 # Local datasets and uploaded personal images
 data/raw_images/
 data/train/
 data/processed/
+data/faceid_profiles/
+data/train_dataset_v2/
+data/external/
 *.zip
 *.tar
 *.tar.gz
@@ -57,20 +69,13 @@ data/processed/
 runs/
 wandb/
 
-# TensorBoard event logs
-*.tfevents.*
-
-# Large training datasets (kept in history, not tracked going forward)
-data/train_dataset_v2/
-
-# Office 暫存鎖檔 / 暫存
-~$*
-*.tmp
-
-# 大型資料集與生成樣本（不進版控）
+# Research data, generated evaluations, and local portrait resources
 external_stage2_dataset.jsonl
-external/
+evaluation_results/
 resources/
 tmp/
+*.tfevents.*
+~$*
+*.tmp
 /*.png
 /*.gif

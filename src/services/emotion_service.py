@@ -44,12 +44,9 @@ def _get_engine():
                 from ..reasoning.backbone import Backbone, BackboneConfig
                 from ..reasoning.erc_engine import ERCEngine
 
-                lora = config.LORA_PATH or None
-                print(f"[erc] 載入模型 {config.ERC_MODEL} (quant={config.ERC_QUANT}"
-                      + (f", lora={lora}" if lora else "") + ")…")
+                print(f"[erc] 載入模型 {config.ERC_MODEL} (quant={config.ERC_QUANT})…")
                 bk = Backbone(BackboneConfig(model=config.ERC_MODEL,
-                                             quantization=config.ERC_QUANT,
-                                             lora_path=lora))
+                                             quantization=config.ERC_QUANT))
                 _engine = ERCEngine(bk, use_context=True, two_stage=True)
                 print("[erc] 模型就緒")
     return _engine
@@ -60,7 +57,12 @@ MAX_INPUT_CHARS = 500
 _engine_broken = False
 
 
-def _predict_sync(text: str, history: list[dict], speaker_prior: str | None = None) -> dict:
+def _predict_sync(
+    text: str,
+    history: list[dict],
+    speaker_prior: str | None = None,
+    correction_examples: list[dict] | None = None,
+) -> dict:
     global _engine_broken
     text = (text or "")[:MAX_INPUT_CHARS]
 
@@ -72,7 +74,12 @@ def _predict_sync(text: str, history: list[dict], speaker_prior: str | None = No
     # 真實推理：任何失敗（OOM/逾時/載入錯誤）都退回關鍵字規則，確保永不當機
     try:
         engine = _get_engine()
-        res = engine.predict(text, history=history, speaker_prior=speaker_prior)
+        res = engine.predict(
+            text,
+            history=history,
+            speaker_prior=speaker_prior,
+            correction_examples=correction_examples,
+        )
         return {"emotion": res.predicted or "neutral", "rationale": res.rationale,
                 "parse_ok": res.parse_ok, "source": "llm"}
     except Exception as e:  # noqa: BLE001
@@ -85,17 +92,31 @@ def _predict_sync(text: str, history: list[dict], speaker_prior: str | None = No
                 "rationale": f"(fallback: {type(e).__name__})", "source": "fallback"}
 
 
-async def predict_emotion_local(text: str, history: list[dict], speaker_prior: str | None = None) -> dict:
+async def predict_emotion_local(
+    text: str,
+    history: list[dict],
+    speaker_prior: str | None = None,
+    correction_examples: list[dict] | None = None,
+) -> dict:
     """
     非同步介面：把同步的模型推理丟到執行緒，避免阻塞 event loop。
     """
-    return await asyncio.to_thread(_predict_sync, text, history, speaker_prior)
+    return await asyncio.to_thread(
+        _predict_sync, text, history, speaker_prior, correction_examples
+    )
 
 
-async def predict_emotion(text: str, history: list[dict], speaker_prior: str | None = None) -> dict:
+async def predict_emotion(
+    text: str,
+    history: list[dict],
+    speaker_prior: str | None = None,
+    correction_examples: list[dict] | None = None,
+) -> dict:
     """Use the isolated ERC service when configured, otherwise infer locally."""
     if not config.EMOTION_API_URL:
-        return await predict_emotion_local(text, history, speaker_prior)
+        return await predict_emotion_local(
+            text, history, speaker_prior, correction_examples
+        )
 
     from .emotion_inference_client import (
         RemoteEmotionInferenceError,
@@ -106,6 +127,8 @@ async def predict_emotion(text: str, history: list[dict], speaker_prior: str | N
         return await predict_remote(
             text,
             history,
+            speaker_prior=speaker_prior,
+            correction_examples=correction_examples,
             base_url=config.EMOTION_API_URL,
             token=config.EMOTION_API_TOKEN,
             timeout=config.EMOTION_API_TIMEOUT,
@@ -114,7 +137,9 @@ async def predict_emotion(text: str, history: list[dict], speaker_prior: str | N
         if not config.EMOTION_API_FALLBACK_LOCAL:
             raise
         print(f"[erc][warn] remote inference unavailable; using local fallback: {exc}")
-        return await predict_emotion_local(text, history, speaker_prior)
+        return await predict_emotion_local(
+            text, history, speaker_prior, correction_examples
+        )
 
 
 _intent_decoder = None
@@ -155,21 +180,42 @@ async def produce_visual_instruction(text: str, history: list[dict],
     from ..reasoning.visual_instruction import visual_instruction_generator as vig
     from ..perception.multimodal_fusion import perceive
 
-    # 0. 線上個人化：把使用者的長期情緒先驗（由 👎 更正累積於 users.emotion_prior）
-    #    讀回，當 speaker_prior 影響本次判讀。讓回饋免重訓即刻生效（學習迴圈 Level 1）。
     speaker_prior = None
-    if user_id and not config.MOCK_MODE:
+    correction_memory = {"exact_label": None, "examples": []}
+    if user_id:
         try:
+            from db.feedback_repo import get_emotion_correction_memory
             from db.user_repo import get_user_prior
-            speaker_prior = await asyncio.to_thread(get_user_prior, user_id)
+
+            if not config.MOCK_MODE:
+                correction_memory, speaker_prior = await asyncio.gather(
+                    asyncio.to_thread(get_emotion_correction_memory, user_id, text),
+                    asyncio.to_thread(get_user_prior, user_id),
+                )
+            else:
+                correction_memory = await asyncio.to_thread(
+                    get_emotion_correction_memory, user_id, text
+                )
         except Exception as e:  # noqa: BLE001
-            print(f"[erc][warn] 讀取 speaker_prior 失敗，略過：{type(e).__name__}: {e}")
+            print(f"[erc][warn] 讀取使用者修正記憶失敗，略過：{type(e).__name__}: {e}")
 
     # 1. 文字模態：剝除 emoji 後只看純文字，使兩模態乾淨分離
     #    （否則 LLM 逕自讀到 emoji，emoji 的貢獻會被藏進文字判讀裡）
     clean_text = emoji_lib.replace_emoji(text, "").strip()
-    if clean_text:
-        result = await predict_emotion(clean_text, history, speaker_prior=speaker_prior)
+    if correction_memory["exact_label"]:
+        result = {
+            "emotion": correction_memory["exact_label"],
+            "parse_ok": True,
+            "rationale": "(exact user correction memory)",
+            "source": "correction_memory",
+        }
+    elif clean_text:
+        result = await predict_emotion(
+            clean_text,
+            history,
+            speaker_prior=speaker_prior,
+            correction_examples=correction_memory["examples"],
+        )
     else:
         result = {"emotion": "neutral", "parse_ok": bool(text.strip()) is False, "rationale": ""}
 
@@ -177,6 +223,11 @@ async def produce_visual_instruction(text: str, history: list[dict],
     fused = perceive(text, result["emotion"],
                      text_confident=result.get("parse_ok", True) and bool(clean_text),
                      sticker_keywords=sticker_keywords)
+    if correction_memory["exact_label"]:
+        fused.emotion = correction_memory["exact_label"]
+        fused.source = "correction_memory"
+        fused.confidence = 1.0
+        fused.note = "完全相同的訊息曾由此使用者修正，採用最近一次修正"
     final_emotion = fused.emotion
 
     # 3. 可選意圖解碼（以融合後情緒為準）
@@ -192,6 +243,7 @@ async def produce_visual_instruction(text: str, history: list[dict],
     compound = resolve_emotions(fusion_dict)
     return {"emotion": final_emotion, "text_emotion": result["emotion"],
             "parse_ok": result.get("parse_ok"),
+            "inference_source": result.get("source", "unknown"),
             "fusion": fusion_dict,
             "emotions": compound["emotions"],
             "compound_name": compound["compound_name"],
