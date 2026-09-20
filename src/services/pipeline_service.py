@@ -60,7 +60,7 @@ class PipelineAnalysis:
 
     @property
     def emotions(self) -> list[dict[str, Any]]:
-        """呈現用的情緒集合（單一或主/次）；缺欄位時退回單一情緒。"""
+        """Presentation emotions, falling back to the primary label."""
         got = self.payload.get("emotions")
         if got:
             return got
@@ -133,7 +133,6 @@ class PipelineService:
         analysis: PipelineAnalysis,
         *,
         intensity_multiplier: float = 1.0,
-        force_modality: str | None = None,
     ) -> PipelineResult:
         instruction = copy.deepcopy(analysis.instruction)
         base_intensity = analysis.base_intensity
@@ -142,10 +141,11 @@ class PipelineService:
         instruction["intensity"] = effective_intensity
 
         # Keep modality and renderer hints consistent with the adjusted value.
-        if force_modality not in (None, "video", "sticker"):
-            raise ValueError("force_modality must be 'video', 'sticker', or None")
-        modality = force_modality or (
-            "video" if effective_intensity >= 0.6 else "sticker"
+        identity_mode = str(instruction.get("identity", {}).get("mode", "lora"))
+        modality = (
+            "sticker"
+            if identity_mode == "faceid"
+            else ("video" if effective_intensity >= 0.6 else "sticker")
         )
         instruction["modality"] = modality
         hints = instruction.setdefault("generation_hints", {})

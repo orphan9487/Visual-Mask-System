@@ -43,11 +43,7 @@ EMOTION_PROFILE = {
     "anger":    ("angry expression, furrowed brows, clenched jaw, intense glare, frowning", 0.90),
     "joy":      ("happy bright smile, sparkling eyes, cheerful expression", 0.80),
     "surprise": ("surprised expression, wide eyes, raised eyebrows, slightly open mouth", 0.80),
-    "fear":     (
-        "(terrified face:1.5), (wide-open eyes, white sclera:1.7), "
-        "raised eyebrows, screaming, dropped jaw",
-        0.75,
-    ),
+    "fear":     ("fearful expression, tense face, wide worried eyes", 0.75),
     "disgust":  ("disgusted expression, wrinkled nose, curled upper lip", 0.60),
     "sadness":  ("sad expression, downcast teary eyes, drooping mouth, sorrowful", 0.60),
     "neutral":  ("calm relaxed neutral expression", 0.30),
@@ -60,11 +56,23 @@ DEFAULT_NEGATIVE = ("blurry eyes, deformed iris, hazy, low quality, "
                     "black and white, monochrome, grayscale, desaturated, "
                     "sepia, muted colors")
 
-COLOR_PHOTO_STYLE = ("realistic color photo, natural skin tones, "
-                     "soft indoor lighting")
+COLOR_PHOTO_STYLE = ("full-color color photograph, natural skin tones, "
+                     "natural color saturation, realistic indoor lighting")
 
 HENRY_NEGATIVE = ("bald, receding hairline, gray hair, white hair, "
                   "elderly, old man")
+
+FACEID_NEGATIVE = (
+    "round wide face, oversized eyes, wide-set eyes, protruding nose, side view, "
+    "tilted head, multiple faces, deformed, cross-eyed, blurry, low quality, "
+    "painting, anime, monochrome, grayscale, sepia, cropped head, cropped face, "
+    "extreme close-up, close-up, face close-up, zoomed in, cut off hair"
+)
+
+FACEID_COMPOSITION = (
+    "centered head-and-shoulders portrait, full head visible, "
+    "space above hair"
+)
 
 # Modality Selector 門檻：喚醒度 ≥ 此值 → 動態影片；否則靜態貼圖。
 INTENSITY_VIDEO_THRESHOLD = 0.6
@@ -121,17 +129,21 @@ class VisualInstructionGenerator:
         return (f"A portrait of {mask.trigger} person showing {expression}, "
                 f"{motion}, vivid lighting, masterpiece, high quality, highly detailed.")
 
-    def _positive_prompt(self, mask: MaskIdentity, expression: str,
-                         emotion: str) -> str:
-        # Fear spends the limited CLIP token budget on its clearest cue: eyes.
-        # Other emotions keep the shared expression weighting.
-        if emotion == "fear":
-            # Put fear before identity so SD1.5 does not dilute the expression.
-            return (f"{mask.trigger}, {expression}, {mask.base_prompt}, "
-                    f"{COLOR_PHOTO_STYLE}")
-        weighted_expression = f"({expression}:1.3)"
-        return (f"{mask.trigger}, {mask.base_prompt}, "
-                f"{weighted_expression}, {COLOR_PHOTO_STYLE}")
+    def _positive_prompt(self, mask: MaskIdentity, expression: str) -> str:
+        # 沿用專案既有生成慣例：身分在前、情緒以權重強化(:1.3)壓過身分中性傾向
+        identity_prefix = (
+            mask.base_prompt
+            if mask.identity_mode == "faceid"
+            else f"{mask.trigger}, {mask.base_prompt}"
+        )
+        composition = (
+            f", {FACEID_COMPOSITION}"
+            if mask.identity_mode == "faceid"
+            else ""
+        )
+        return (f"{identity_prefix}, "
+                f"({expression}:1.3){composition}, vivid lighting, masterpiece, "
+                f"high quality, highly detailed, {COLOR_PHOTO_STYLE}")
 
     def generate(self, emotion: str, *, user_id: Optional[str] = None,
                  mask_id: Optional[str] = None, intensity: Optional[float] = None,
@@ -142,36 +154,50 @@ class VisualInstructionGenerator:
         intensity = base_intensity if intensity is None else float(intensity)
 
         mask = self.db.resolve(user_id=user_id, mask_id=mask_id)
-        modality = self.modality.select(emotion, intensity)
+        # FaceID Portrait v11 produces still SD1.5 images.  Keeping this static
+        # also restores the original pre-Talking-Face product boundary.
+        modality = (
+            "sticker"
+            if mask.identity_mode == "faceid"
+            else self.modality.select(emotion, intensity)
+        )
 
         hints = {
             "num_frames": 16 if modality == "video" else 1,
-            "num_inference_steps": 25,
-            "guidance_scale": 8.0,
+            "num_inference_steps": 30 if mask.identity_mode == "faceid" else 25,
+            "guidance_scale": 7.0 if mask.identity_mode == "faceid" else 8.0,
             "lora_weight": mask.lora_weight,
             # Training uses portrait buckets; keep the same portrait framing
             # at inference rather than letting AnimateDiff default to 512x512.
-            "width": 384,
+            "width": 512 if mask.identity_mode == "faceid" else 384,
             "height": 512,
         }
-        if mask.generation_seed is not None:
-            hints["seed"] = int(mask.generation_seed)
 
-        negative_prompt = DEFAULT_NEGATIVE
-        if mask.mask_id == "henry":
+        negative_prompt = (
+            FACEID_NEGATIVE if mask.identity_mode == "faceid" else DEFAULT_NEGATIVE
+        )
+        if mask.mask_id == "henry" and mask.identity_mode != "faceid":
             negative_prompt = f"{negative_prompt}, {HENRY_NEGATIVE}"
 
         return VisualInstruction(
             user_id=user_id,
-            identity={"mask_id": mask.mask_id, "trigger": mask.trigger,
-                      "lora_path": mask.lora_path, "lora_weight": mask.lora_weight,
-                      "base_prompt": mask.base_prompt},
+            identity={
+                "mask_id": mask.mask_id,
+                "trigger": mask.trigger,
+                "lora_path": mask.lora_path,
+                "lora_weight": mask.lora_weight,
+                "base_prompt": mask.base_prompt,
+                "mode": mask.identity_mode,
+                "faceid_reference_paths": list(mask.faceid_reference_paths),
+                "faceid_scale": mask.faceid_scale,
+                "faceid_checkpoint": mask.faceid_checkpoint,
+            },
             emotion=emotion,
             emotion_zh=EMOTION_ZH.get(emotion, emotion),
             intensity=round(intensity, 3),
             modality=modality,
             scene_description=self._scene_description(mask, expression, modality),
-            positive_prompt=self._positive_prompt(mask, expression, emotion),
+            positive_prompt=self._positive_prompt(mask, expression),
             negative_prompt=negative_prompt,
             generation_hints=hints,
             source={"utterance": utterance, "rationale": rationale[:300]},

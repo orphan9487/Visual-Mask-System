@@ -9,9 +9,14 @@ feedback_repo.py — 使用者反饋資料存取層
   save_intensity_feedback()      → 寫入 intensity_adjustments
   get_intensity_multiplier()     → 計算歷史平均乘數（0.5–1.5）
 """
+import json
+import re
+import unicodedata
 from collections import Counter
+from difflib import SequenceMatcher
 
 from db.connection import get_connection
+from src.reasoning.labels import CANONICAL_EMOTIONS, coerce_prediction
 
 # ── 情緒標籤正規化 ─────────────────────────────────────────────────────────────
 # 與 visual_instruction_generator.py 的 EMOTION_MAP key 一致（子字串匹配）
@@ -32,6 +37,88 @@ def _canonical(label: str) -> str:
     return label_lower
 
 
+def normalize_emotion_label(label: str) -> str:
+    """Normalize a feedback label into the ERC seven-label space."""
+    normalized = coerce_prediction(label)
+    if normalized not in CANONICAL_EMOTIONS:
+        raise ValueError(
+            f"Unsupported emotion label: {label!r}; expected one of "
+            + ", ".join(CANONICAL_EMOTIONS)
+        )
+    return normalized
+
+
+def normalize_utterance(text: str) -> str:
+    """Create a stable comparison key without changing the stored utterance."""
+    text = unicodedata.normalize("NFKC", text or "").casefold().strip()
+    return re.sub(r"\s+", " ", text)
+
+
+def get_emotion_correction_memory(
+    username: str,
+    utterance: str,
+    *,
+    scan_limit: int = 200,
+    example_limit: int = 3,
+    similarity_threshold: float = 0.72,
+) -> dict:
+    """Return an exact correction and nearby corrected examples for one user.
+
+    ``training_data`` remains the single source of truth. Exact matches may be
+    applied immediately; similar examples are prompt evidence only and never
+    override the model by themselves.
+    """
+    target = normalize_utterance(utterance)
+    if not username or not target:
+        return {"exact_label": None, "examples": []}
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT context, correct_label FROM training_data
+                   WHERE username = %s ORDER BY correction_time DESC LIMIT %s""",
+                (username, max(1, min(int(scan_limit), 1000))),
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    exact_label = None
+    candidates: list[tuple[float, dict]] = []
+    seen: set[str] = set()
+    for context_json, raw_label in rows:
+        try:
+            obj = json.loads(context_json) if context_json else {}
+        except (TypeError, ValueError):
+            continue
+        source_text = str(obj.get("text") or "").strip()
+        key = normalize_utterance(source_text)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        try:
+            label = normalize_emotion_label(str(raw_label))
+        except ValueError:
+            continue
+        if key == target:
+            exact_label = label
+            break
+        score = SequenceMatcher(None, target, key).ratio()
+        if score >= similarity_threshold:
+            candidates.append((score, {
+                "text": source_text[:500],
+                "correct_label": label,
+                "similarity": round(score, 3),
+            }))
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return {
+        "exact_label": exact_label,
+        "examples": [item[1] for item in candidates[:max(0, example_limit)]],
+    }
+
+
 # ── 情緒反饋 ──────────────────────────────────────────────────────────────────
 
 def save_emotion_feedback(
@@ -44,6 +131,10 @@ def save_emotion_feedback(
     儲存一筆情緒修正紀錄至 training_data，
     並呼叫 _update_user_emotion_baseline() 更新 users.emotion_prior。
     """
+    wrong = normalize_emotion_label(wrong_label)
+    correct = normalize_emotion_label(correct_label)
+    if wrong == correct:
+        raise ValueError("correct_label must differ from wrong_label")
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -53,9 +144,9 @@ def save_emotion_feedback(
                    VALUES (%s, %s, %s, %s, NOW())""",
                 (
                     username,
-                    context[:2000],                     # 防止超長 context
-                    _canonical(wrong_label),
-                    _canonical(correct_label),
+                    context,
+                    wrong,
+                    correct,
                 ),
             )
         conn.commit()

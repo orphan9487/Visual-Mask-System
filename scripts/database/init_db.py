@@ -98,18 +98,35 @@ def initialize_database() -> None:
                     (account, username, hash_password(password), prior),
                 )
 
+            # ``user_loras`` is a legacy table name.  It now stores either a
+            # FaceID profile or a LoRA identity.  The restored WebSocket demo
+            # defaults every built-in account to Henry FaceID while retaining
+            # the former LoRA identities as selectable fallbacks.
             user_loras = [
-                ("Alice", "human_8692", "Person 8692", 1),
-                ("Bob", "human_8692", "Person 8692", 1),
+                ("Alice", "henry", "Henry FaceID", 1),
+                ("Alice", "human_8692", "Person 8692 (LoRA)", 0),
+                ("Bob", "henry", "Henry FaceID", 1),
+                ("Bob", "human_8692", "Person 8692 (LoRA)", 0),
                 ("Bob", "ethan", "Ethan", 0),
-                ("Charlie", "human_8692", "Person 8692", 1),
+                ("Charlie", "henry", "Henry FaceID", 1),
+                ("Charlie", "human_8692", "Person 8692 (LoRA)", 0),
                 ("Charlie", "yourname", "Yourname", 0),
             ]
+            demo_usernames = sorted({row[0] for row in user_loras})
+            placeholders = ", ".join(["%s"] * len(demo_usernames))
+            cursor.execute(
+                f"UPDATE user_loras SET is_active = 0 "
+                f"WHERE username IN ({placeholders})",
+                tuple(demo_usernames),
+            )
             for row in user_loras:
                 cursor.execute(
-                    """INSERT IGNORE INTO user_loras
+                    """INSERT INTO user_loras
                        (username, lora_key, display_name, is_active)
-                       VALUES (%s, %s, %s, %s)""",
+                       VALUES (%s, %s, %s, %s)
+                       ON DUPLICATE KEY UPDATE
+                           display_name = VALUES(display_name),
+                           is_active = VALUES(is_active)""",
                     row,
                 )
 

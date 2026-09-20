@@ -94,11 +94,10 @@ class Backbone:
         loader = AutoModel if self.is_internvl else AutoModelForCausalLM
         if quant is not None and self.is_internvl:
             # Breeze2 is a remote-code composite model. Transformers 4.44.2
-            # correctly loads its config, but does not expose the outer model's
-            # 4-bit marker early enough for Accelerate. On a single GPU,
-            # Accelerate then calls model.to(), which quantized models reject.
-            # Force dispatch hooks only for this load and restore the library
-            # function immediately afterwards.
+            # loads its config correctly, but Accelerate may still call
+            # model.to() while dispatching the quantized model. Force dispatch
+            # hooks for this load only; quantized models cannot be moved with
+            # a later model.to() call.
             import transformers.modeling_utils as modeling_utils
 
             original_dispatch = modeling_utils.dispatch_model

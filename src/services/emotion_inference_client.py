@@ -39,6 +39,8 @@ async def predict_remote(
     text: str,
     history: list[dict],
     *,
+    speaker_prior: str | None = None,
+    correction_examples: list[dict] | None = None,
     base_url: str,
     token: str = "",
     timeout: float = 120.0,
@@ -46,7 +48,12 @@ async def predict_remote(
     return await asyncio.to_thread(
         _post_json,
         f"{base_url.rstrip('/')}/analyze",
-        {"text": text, "history": history},
+        {
+            "text": text,
+            "history": history,
+            "speaker_prior": speaker_prior,
+            "correction_examples": correction_examples or [],
+        },
         token=token,
         timeout=timeout,
     )

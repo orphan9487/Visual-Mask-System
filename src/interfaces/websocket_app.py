@@ -7,15 +7,15 @@ import json
 import uuid
 from collections import deque
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-
-from src.config import inference as inference_config
 from pydantic import BaseModel
 
+from src.config import inference as inference_config
 from db.feedback_repo import (
     get_intensity_multiplier,
     save_emotion_feedback,
@@ -45,7 +45,10 @@ class SetLoraRequest(BaseModel):
 
 class EmotionFeedbackRequest(BaseModel):
     username: str
-    correct_label: str
+    correct_label: Literal[
+        "neutral", "joy", "sadness", "anger", "surprise", "fear", "disgust"
+    ]
+    msg_id: str | None = None
 
 
 class IntensityFeedbackRequest(BaseModel):
@@ -121,6 +124,7 @@ def create_app(pipeline_service: PipelineService = pipeline) -> FastAPI:
     manager = ConnectionManager()
     histories: dict[str, deque[dict[str, str]]] = {}
     last_context: dict[str, tuple[str, str, float]] = {}
+    feedback_contexts: dict[tuple[str, str], tuple[str, str, float]] = {}
 
     @app.get("/")
     async def homepage():
@@ -150,17 +154,24 @@ def create_app(pipeline_service: PipelineService = pipeline) -> FastAPI:
     @app.post("/api/set_lora")
     def set_lora(req: SetLoraRequest):
         if req.lora_key not in identity_db.masks:
-            raise HTTPException(status_code=400, detail=f"未知的 lora_key: {req.lora_key}")
+            raise HTTPException(status_code=400, detail=f"未知的面具 key: {req.lora_key}")
         if not set_user_active_lora(req.username, req.lora_key):
-            raise HTTPException(status_code=403, detail="此帳號沒有該 LoRA 的使用權限")
+            raise HTTPException(status_code=403, detail="此帳號沒有該面具的使用權限")
         display = identity_db.masks[req.lora_key].display_name or req.lora_key
         return {"message": f"已切換至 {display}（{req.lora_key}）"}
 
     @app.post("/api/emotion_feedback")
     def emotion_feedback(req: EmotionFeedbackRequest):
-        context, wrong_label, _ = last_context.get(
-            req.username, ("", "unknown", 0.5)
+        stored = (
+            feedback_contexts.get((req.username, req.msg_id))
+            if req.msg_id
+            else last_context.get(req.username)
         )
+        if stored is None:
+            raise HTTPException(status_code=409, detail="找不到要修正的訊息，請重新送出訊息後再試")
+        context, wrong_label, _ = stored
+        if wrong_label == req.correct_label:
+            raise HTTPException(status_code=400, detail="正確情緒不可與原判斷相同")
         save_emotion_feedback(req.username, context, wrong_label, req.correct_label)
         return {"message": f"情緒反饋已記錄（{wrong_label} → {req.correct_label}）"}
 
@@ -212,6 +223,9 @@ def create_app(pipeline_service: PipelineService = pipeline) -> FastAPI:
                         analysis.emotion,
                         analysis.base_intensity,
                     )
+                    feedback_contexts[(client_name, msg_id)] = last_context[client_name]
+                    if len(feedback_contexts) > 1000:
+                        feedback_contexts.pop(next(iter(feedback_contexts)))
                     await manager.broadcast(_public_analysis_payload(
                         analysis,
                         msg_id=msg_id,

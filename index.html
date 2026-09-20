@@ -82,8 +82,17 @@
   .analyze-hint{margin-top:9px;display:inline-flex;align-items:center;gap:4px;font-size:.66rem;
     opacity:.62;font-family:var(--mono);letter-spacing:.02em}
   .analyze-hint .ico{width:12px;height:12px}
-  .mask-area{margin-top:10px}
-  .mask-area img,.mask-area video{max-width:200px;border-radius:12px;border:1px solid var(--border);display:block}
+  /* Keep the existing bubble sizing. Scale the 1:1 source image down inside
+     that bubble instead of allowing a fixed-width media box to widen it. */
+  .mask-area{margin-top:10px;max-width:100%}
+  .mask-area img{
+    display:block;width:auto;max-width:100%;height:auto;aspect-ratio:1 / 1;
+    object-fit:contain;object-position:center;border-radius:12px;border:1px solid var(--border)
+  }
+  .mask-area video{
+    display:block;width:auto;max-width:100%;height:auto;
+    object-fit:contain;object-position:center;border-radius:12px;border:1px solid var(--border)
+  }
   .mask-loading{display:inline-flex;align-items:center;gap:8px;font-size:.8rem;color:var(--muted);
     background:var(--card);border:1px solid var(--border);border-radius:10px;padding:9px 13px}
   .skeleton{width:120px;height:120px;border-radius:12px;background:
@@ -557,12 +566,12 @@ function fbBack(){
 async function submitEmotionFeedback(){
   const correct=document.getElementById("fbEmotionSelect").value;
   try{
-    const res=await fetch(`${HTTP_BASE}/api/emotion_feedback`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:clientName,correct_label:correct})});
-    const data=await res.json();closeFeedbackModal();
+    const res=await fetch(`${HTTP_BASE}/api/emotion_feedback`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:clientName,correct_label:correct,msg_id:_fbKey})});
+    const data=await res.json();if(!res.ok)throw new Error(data.detail||"回饋格式錯誤");closeFeedbackModal();
     if(analyses[_fbKey])analyses[_fbKey].fb="disliked";
     if(selectedKey===_fbKey)renderPanel();
     appendSys(data.message,"note");
-  }catch(e){alert("送出反饋失敗，請確認伺服器狀態。");}
+  }catch(e){alert(`送出反饋失敗：${e.message||"請確認伺服器狀態"}`);}
 }
 async function submitIntensityFeedback(){
   const a=analyses[_fbKey]||{};

@@ -1,43 +1,35 @@
-# 獨立情緒推論服務
+# 獨立 Breeze2 情緒推論服務
 
-此服務只執行交接包的文字 ERC 推論。LINE、WebSocket、emoji／貼圖融合、
-VisualInstruction 與 LoRA 圖片生成仍由主程式負責。
+情緒推論與 WebSocket／FaceID 圖片生成使用不同 Python 環境與程序，避免
+Breeze2 所需的 Transformers 版本覆蓋主環境套件。
 
 ## 架構
 
-主程式透過 `VMS_EMOTION_API_URL` 呼叫 localhost `/analyze`。未設定 URL 時使用
-原本的同程序推論；服務暫時不可用時，`VMS_EMOTION_API_FALLBACK=local` 會回退
-本地推論。
+```text
+瀏覽器 WebSocket
+       |
+       v
+chat_server.py :8000  ---- HTTP /analyze ---->  emotion_server.py :8010
+       |                                         Breeze2 3B (4-bit)
+       v
+SD1.5 + FaceID
+```
 
-## 建立環境
+兩個服務只綁定 `127.0.0.1`。情緒服務不包含 LINE、WebSocket 或圖片生成。
 
-交接包原先使用 transformers 4.47.1，但 Breeze2 的 InternVL remote config 會觸發
-`KeyError: 'architectures'`。情緒服務固定使用已驗證的 4.44.2；主環境使用不同
-版本，因此不可覆蓋主環境套件。
+## 首次建立情緒環境
 
-```powershell
+在專案根目錄執行：
+
+```cmd
 C:\Users\User\anaconda3\envs\mask_env\python.exe -m venv --system-site-packages .venv-erc
-.\.venv-erc\Scripts\python.exe -m pip install -r requirements-emotion.txt
+.venv-erc\Scripts\python.exe -m pip install -r requirements-emotion.txt
 ```
 
-`--system-site-packages` 只用來共用已安裝的 PyTorch 2.6.0+cu124；
-transformers、accelerate、peft 與 bitsandbytes 會在 `.venv-erc` 內使用交接包版本。
+`--system-site-packages` 用來共用既有的 PyTorch 2.6.0+cu124；Transformers、
+Accelerate、PEFT 與 bitsandbytes 會使用 `.venv-erc` 內的相容版本。
 
-## 啟動順序
-
-終端機一（情緒模型，僅綁定 localhost）：
-
-```powershell
-.\.venv-erc\Scripts\python.exe -m uvicorn src.interfaces.emotion_inference_app:app --host 127.0.0.1 --port 8010
-```
-
-終端機二（現有 LINE/WebSocket）：
-
-```powershell
-.\.venv\Scripts\python.exe -m uvicorn src.interfaces.websocket_app:app --host 127.0.0.1 --port 8000
-```
-
-主程式 `.env`：
+## `.env` 設定
 
 ```dotenv
 VMS_MOCK=0
@@ -45,19 +37,37 @@ VMS_MODEL=breeze2-3b
 VMS_QUANT=4bit
 VMS_EMOTION_API_URL=http://127.0.0.1:8010
 VMS_EMOTION_API_TIMEOUT=120
-VMS_EMOTION_API_FALLBACK=local
+VMS_EMOTION_API_FALLBACK=error
 ```
 
-兩個程序會讀取相同模型設定，但 8010 服務明確呼叫本地模型函式，不會再次
-呼叫自己。
+`error` 表示 8010 無法使用時直接回報錯誤，避免主程序載入第二份 Breeze2
+或悄悄退回關鍵字規則。
+
+## 每次啟動
+
+開啟兩個 CMD，順序如下。
+
+終端機一（等待顯示「模型就緒」）：
+
+```cmd
+.venv-erc\Scripts\python.exe emotion_server.py
+```
+
+終端機二：
+
+```cmd
+.venv\Scripts\python.exe chat_server.py
+```
+
+瀏覽器開啟 `http://127.0.0.1:8000`。
 
 ## 驗證
 
-```powershell
-Invoke-RestMethod http://127.0.0.1:8010/health
-$body = @{text='我很不開心'; history=@()} | ConvertTo-Json
-Invoke-RestMethod http://127.0.0.1:8010/analyze -Method Post -ContentType 'application/json' -Body $body
+```cmd
+curl http://127.0.0.1:8010/health
+curl http://127.0.0.1:8000/health
 ```
 
-回傳的 `source` 應為 `llm`；若是 `mock` 或 `fallback`，不能視為交接包模型
-已成功整合。
+8010 回應的 `configured_model` 應為 `breeze2-3b`、`model_loaded` 應為
+`true`；8000 回應的 `emotion_inference` 應為 `remote`。實際分析結果的
+`source` 應為 `llm`，不能是 `mock` 或 `fallback`。

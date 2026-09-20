@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field
@@ -18,12 +18,24 @@ class HistoryItem(BaseModel):
     content: str = Field(min_length=1, max_length=1000)
 
 
+class CorrectionExample(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+    correct_label: Literal[
+        "neutral", "joy", "sadness", "anger", "surprise", "fear", "disgust"
+    ]
+    similarity: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
 class AnalyzeRequest(BaseModel):
     text: str = Field(min_length=1, max_length=500)
     history: list[HistoryItem] = Field(default_factory=list, max_length=12)
+    speaker_prior: str | None = Field(default=None, max_length=2000)
+    correction_examples: list[CorrectionExample] = Field(
+        default_factory=list, max_length=5
+    )
 
 
-Predictor = Callable[[str, list[dict]], Awaitable[dict]]
+Predictor = Callable[..., Awaitable[dict]]
 
 
 def create_app(predictor: Predictor = predict_emotion_local) -> FastAPI:
@@ -45,9 +57,15 @@ def create_app(predictor: Predictor = predict_emotion_local) -> FastAPI:
     @app.post("/analyze")
     async def analyze(payload: AnalyzeRequest, _: None = Depends(authorize)) -> dict:
         history = [item.model_dump() for item in payload.history]
+        corrections = [item.model_dump() for item in payload.correction_examples]
         # Transformer generation on one shared GPU model is not thread-safe.
         async with inference_lock:
-            result = await predictor(payload.text.strip(), history)
+            result = await predictor(
+                payload.text.strip(),
+                history,
+                speaker_prior=payload.speaker_prior,
+                correction_examples=corrections,
+            )
         emotion = str(result.get("emotion", "neutral"))
         if emotion not in CANONICAL_EMOTIONS:
             emotion = "neutral"

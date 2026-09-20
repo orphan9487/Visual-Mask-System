@@ -15,6 +15,7 @@ from typing import Any
 from src.generation.diffusion_engine import DiffusionSynthesisEngine
 from src.generation.renderers import (
     AnimatedVideoRenderer,
+    FaceIDStickerRenderer,
     GenerationRequest,
     Renderer,
     StaticStickerRenderer,
@@ -62,6 +63,7 @@ class InstructionGenerationRunner:
         self,
         engine: DiffusionSynthesisEngine | None = None,
         sticker_renderer: Renderer | None = None,
+        faceid_renderer: Renderer | None = None,
         video_renderer: Renderer | None = None,
         output_dir: str | Path = DEFAULT_OUTPUT_DIR,
     ) -> None:
@@ -69,11 +71,20 @@ class InstructionGenerationRunner:
         # video request never loads the static SD1.5 pipeline unnecessarily.
         self._legacy_video_engine = engine
         self._sticker_renderer = sticker_renderer
+        self._faceid_renderer = faceid_renderer
         self._video_renderer = video_renderer
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def _renderer_for(self, modality: str) -> Renderer:
+    def _renderer_for(self, modality: str, identity_mode: str) -> Renderer:
+        if identity_mode == "faceid":
+            if modality != "sticker":
+                raise InstructionValidationError(
+                    "FaceID identities currently support still images only."
+                )
+            if self._faceid_renderer is None:
+                self._faceid_renderer = FaceIDStickerRenderer()
+            return self._faceid_renderer
         if modality == "sticker":
             if self._sticker_renderer is None:
                 self._sticker_renderer = StaticStickerRenderer()
@@ -101,12 +112,9 @@ class InstructionGenerationRunner:
         if not isinstance(identity, dict) or not isinstance(hints, dict):
             raise InstructionValidationError("'identity' and 'generation_hints' must be objects.")
 
-        lora_path = Path(self._require(identity, "lora_path"))
-        if not lora_path.is_absolute():
-            lora_path = PROJECT_ROOT / lora_path
-        lora_path = lora_path.resolve()
-        if not lora_path.is_file():
-            raise InstructionValidationError(f"LoRA file does not exist: {lora_path}")
+        identity_mode = str(identity.get("mode", "lora")).strip().lower()
+        if identity_mode not in {"lora", "faceid"}:
+            raise InstructionValidationError("identity.mode must be 'lora' or 'faceid'.")
 
         modality = overrides.force_modality or vi.get("modality", "sticker")
         if modality not in {"video", "sticker"}:
@@ -128,10 +136,54 @@ class InstructionGenerationRunner:
                 )
 
         normalised_identity = {
-            "path": str(lora_path),
+            "mode": identity_mode,
             "adapter_name": f"instruction_{_SAFE_NAME.sub('_', str(self._require(identity, 'mask_id')))}",
-            "lora_weight": lora_weight,
         }
+        if identity_mode == "lora":
+            lora_path = Path(self._require(identity, "lora_path"))
+            if not lora_path.is_absolute():
+                lora_path = PROJECT_ROOT / lora_path
+            lora_path = lora_path.resolve()
+            if not lora_path.is_file():
+                raise InstructionValidationError(f"LoRA file does not exist: {lora_path}")
+            normalised_identity.update({
+                "path": str(lora_path),
+                "lora_weight": lora_weight,
+            })
+        else:
+            references = identity.get("faceid_reference_paths", [])
+            if not isinstance(references, list) or not references:
+                raise InstructionValidationError(
+                    "FaceID identity has no reference photos. Set "
+                    "VMS_HENRY_FACEID_REFERENCES or register a profile."
+                )
+            resolved_references: list[str] = []
+            for value in references:
+                path = Path(str(value))
+                if not path.is_absolute():
+                    path = PROJECT_ROOT / path
+                path = path.resolve()
+                if not path.is_file():
+                    raise InstructionValidationError(
+                        f"FaceID reference image does not exist: {path}"
+                    )
+                resolved_references.append(str(path))
+            checkpoint = Path(str(self._require(identity, "faceid_checkpoint")))
+            if not checkpoint.is_absolute():
+                checkpoint = PROJECT_ROOT / checkpoint
+            checkpoint = checkpoint.resolve()
+            if not checkpoint.is_file():
+                raise InstructionValidationError(
+                    f"FaceID checkpoint does not exist: {checkpoint}"
+                )
+            scale = float(identity.get("faceid_scale", 0.55))
+            if not 0.0 <= scale <= 2.0:
+                raise InstructionValidationError("faceid_scale must be between 0.0 and 2.0.")
+            normalised_identity.update({
+                "reference_paths": resolved_references,
+                "checkpoint": str(checkpoint),
+                "scale": scale,
+            })
         requested_frames = int(hints.get("num_frames", 16 if modality == "video" else 1))
         normalised_hints = {
             "num_frames": requested_frames,
@@ -140,12 +192,6 @@ class InstructionGenerationRunner:
             "width": int(hints.get("width", 384)),
             "height": int(hints.get("height", 512)),
         }
-        if hints.get("seed") is not None:
-            normalised_hints["seed"] = int(hints["seed"])
-            if normalised_hints["seed"] < 0:
-                raise InstructionValidationError(
-                    "'generation_hints.seed' must not be negative."
-                )
         if normalised_hints["num_frames"] < 1:
             raise InstructionValidationError("'generation_hints.num_frames' must be at least 1.")
         if (normalised_hints["width"] < 64 or normalised_hints["height"] < 64
@@ -204,7 +250,7 @@ class InstructionGenerationRunner:
             prompt, negative_prompt, emotion, overrides.expression_weight
         )
 
-        renderer = self._renderer_for(modality)
+        renderer = self._renderer_for(modality, str(identity["mode"]))
         rendered = renderer.render(GenerationRequest(
             identity=identity,
             prompt=prompt,
@@ -214,15 +260,18 @@ class InstructionGenerationRunner:
             guidance_scale=hints["guidance_scale"],
             width=hints["width"],
             height=hints["height"],
-            seed=(overrides.seed if overrides.seed is not None
-                  else hints.get("seed")),
+            seed=overrides.seed,
         ))
         frames, seed = rendered.frames, rendered.seed
 
         # Include a high-resolution timestamp and the effective LoRA weight so
         # controlled runs with the same seed never overwrite one another.
         stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns() % 1_000_000_000:09d}"
-        weight_tag = f"lw{identity['lora_weight']:.2f}".replace(".", "p")
+        weight_tag = (
+            f"fid{identity['scale']:.2f}"
+            if identity["mode"] == "faceid"
+            else f"lw{identity['lora_weight']:.2f}"
+        ).replace(".", "p")
         stem = f"{emotion}_{weight_tag}_{stamp}_{seed}"
         if modality == "sticker":
             path = self.output_dir / f"sticker_{stem}.png"

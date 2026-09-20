@@ -11,7 +11,8 @@ Identity-DB：使用者身分 → 個人化「面具」設定的註冊表。
 """
 
 import json
-from dataclasses import asdict, dataclass
+import os
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -21,14 +22,33 @@ DB_PATH = PROJECT_ROOT / "data" / "identity_db.json"
 
 @dataclass
 class MaskIdentity:
-    """一個視覺面具的完整設定（生成層據此載入 LoRA 並組 prompt）。"""
+    """一個視覺面具的完整設定（支援 LoRA 或免訓練 FaceID）。"""
     mask_id: str                 # 面具識別碼
     trigger: str                 # LoRA 觸發詞
     base_prompt: str             # 身分基底描述（不含情緒）
     lora_path: str               # LoRA 權重相對路徑
     lora_weight: float = 0.8     # LoRA 融合權重（身分↔表情的取捨）
     display_name: str = ""       # 可讀名稱
-    generation_seed: Optional[int] = None
+    identity_mode: str = "lora"  # "lora" | "faceid"
+    faceid_reference_paths: list[str] = field(default_factory=list)
+    faceid_scale: float = 0.55
+    faceid_checkpoint: str = (
+        "models/ip_adapter_faceid/ip-adapter-faceid-portrait-v11_sd15.bin"
+    )
+
+
+def _configured_henry_faceid_references() -> list[str]:
+    """Read the local Henry enrollment without committing personal photos."""
+    configured = os.getenv("VMS_HENRY_FACEID_REFERENCES", "").strip()
+    if configured:
+        return [item.strip() for item in configured.split(os.pathsep) if item.strip()]
+    profile_dir = PROJECT_ROOT / "data" / "faceid_profiles" / "henry"
+    supported = {".jpg", ".jpeg", ".png", ".webp"}
+    return [
+        str(path)
+        for path in sorted(profile_dir.glob("*"))
+        if path.is_file() and path.suffix.lower() in supported
+    ]
 
 
 # 預設面具庫（沿用專案既有的 person8692 人物 LoRA；日後每位使用者可註冊自己的）
@@ -62,21 +82,21 @@ _DEFAULT_MASKS = {
         mask_id="henry",
         trigger="henrymask",
         base_prompt=(
-            "young adult man, black hair, round glasses, realistic skin, "
-            "front-facing head-and-shoulders portrait, entire head visible, centered face"
+            "color front portrait, young East Asian man, slender oval face, "
+            "almond eyes, thin round glasses, center-parted black hair, natural skin"
         ),
         lora_path="models/henry_mask_lora/henrymask_v3.safetensors",
         lora_weight=0.8,
         display_name="Henry",
-        generation_seed=314159,
+        identity_mode="faceid",
+        faceid_reference_paths=_configured_henry_faceid_references(),
+        faceid_scale=0.55,
     ),
     "ethan": MaskIdentity(
         mask_id="ethan",
         trigger="ethan_mask",
         base_prompt="1boy, masculine, a portrait of Ethan, realistic skin",
-        # The original export contains torch.compile ``_orig_mod`` prefixes;
-        # use the normalized Diffusers-compatible copy for inference.
-        lora_path="models/ethan_mask_lora/pytorch_lora_weights_fixed.safetensors",
+        lora_path="models/ethan_mask_lora/pytorch_lora_weights.safetensors",
         lora_weight=0.8,
         display_name="Ethan",
     ),
@@ -90,7 +110,9 @@ _DEFAULT_MASKS = {
     ),
 }
 
-DEFAULT_MASK_ID = "human"
+# The restored WebSocket product uses Henry's enrolled FaceID profile by
+# default.  LoRA identities remain registered as optional fallback choices.
+DEFAULT_MASK_ID = os.getenv("VMS_DEFAULT_MASK_ID", "henry").strip() or "henry"
 
 
 class IdentityDB:

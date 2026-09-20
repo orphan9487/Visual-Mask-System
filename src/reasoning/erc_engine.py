@@ -60,8 +60,12 @@ class ERCEngine:
     # ------------------------------------------------------------------ #
     # system / context / 單次標籤三段 prompt 皆改用共用模組 prompts.py，
     # 確保與 LoRA 訓練樣本完全一致（見 src/reasoning/prompts.py 說明）。
-    def _system_prompt(self, speaker_prior: Optional[str]) -> str:
-        return system_prompt(speaker_prior)
+    def _system_prompt(
+        self,
+        speaker_prior: Optional[str],
+        correction_examples: list[dict] | None = None,
+    ) -> str:
+        return system_prompt(speaker_prior, correction_examples)
 
     def _context_block(self, history) -> str:
         return context_block(history, use_context=self.use_context)
@@ -94,8 +98,16 @@ class ERCEngine:
         return self.bk.chat(self._system_prompt_cache, user, max_new_tokens=10)
 
     # ------------------------------------------------------------------ #
-    def predict(self, utterance: str, history=None, speaker_prior: Optional[str] = None) -> ERCResult:
-        self._system_prompt_cache = self._system_prompt(speaker_prior)
+    def predict(
+        self,
+        utterance: str,
+        history=None,
+        speaker_prior: Optional[str] = None,
+        correction_examples: list[dict] | None = None,
+    ) -> ERCResult:
+        self._system_prompt_cache = self._system_prompt(
+            speaker_prior, correction_examples
+        )
         context = self._context_block(history)
 
         if self.two_stage:

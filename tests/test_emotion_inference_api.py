@@ -15,9 +15,10 @@ class EmotionInferenceApiTests(unittest.TestCase):
     def test_analyze_returns_raw_model_result_and_history(self):
         received = {}
 
-        async def predictor(text, history):
+        async def predictor(text, history, **kwargs):
             received["text"] = text
             received["history"] = history
+            received.update(kwargs)
             return {
                 "emotion": "disgust",
                 "rationale": "negation detected",
@@ -32,6 +33,10 @@ class EmotionInferenceApiTests(unittest.TestCase):
             json={
                 "text": "我很不開心",
                 "history": [{"role": "A", "content": "我很開心"}],
+                "speaker_prior": "Often uses strong language.",
+                "correction_examples": [
+                    {"text": "操你媽", "correct_label": "anger", "similarity": 0.9}
+                ],
             },
         )
 
@@ -40,9 +45,11 @@ class EmotionInferenceApiTests(unittest.TestCase):
         self.assertEqual(response.json()["source"], "llm")
         self.assertEqual(received["text"], "我很不開心")
         self.assertEqual(received["history"][0]["role"], "A")
+        self.assertEqual(received["speaker_prior"], "Often uses strong language.")
+        self.assertEqual(received["correction_examples"][0]["correct_label"], "anger")
 
     def test_token_is_required_when_configured(self):
-        async def predictor(text, history):
+        async def predictor(text, history, **_kwargs):
             return {"emotion": "neutral", "parse_ok": True}
 
         with patch.dict(os.environ, {"VMS_EMOTION_API_TOKEN": "secret"}):
@@ -74,10 +81,20 @@ class EmotionServiceRoutingTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=remote_result),
             ) as remote,
         ):
-            result = await emotion_service.predict_emotion("我很不開心", [])
+            result = await emotion_service.predict_emotion(
+                "我很不開心",
+                [],
+                speaker_prior="prior",
+                correction_examples=[{"text": "example", "correct_label": "disgust"}],
+            )
 
         self.assertEqual(result, remote_result)
         remote.assert_awaited_once()
+        self.assertEqual(remote.await_args.kwargs["speaker_prior"], "prior")
+        self.assertEqual(
+            remote.await_args.kwargs["correction_examples"][0]["correct_label"],
+            "disgust",
+        )
 
     async def test_remote_failure_can_fall_back_locally(self):
         with (
