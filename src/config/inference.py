@@ -26,6 +26,16 @@ ERC_QUANT = (
     else _quantization
 )
 
+# 選用的 ERC LoRA adapter（留空＝跑純底座）。相對路徑以專案根解析。
+_lora = os.getenv("VMS_LORA_PATH", "").strip()
+if _lora:
+    _lora_path = Path(_lora)
+    if not _lora_path.is_absolute():
+        _lora_path = PROJECT_ROOT / _lora_path
+    ERC_LORA_PATH = str(_lora_path)
+else:
+    ERC_LORA_PATH = None
+
 # Optional dependency-isolated emotion service. Keeping this URL empty runs
 # Breeze2 in the WebSocket process exactly as before.
 EMOTION_API_URL = os.getenv("VMS_EMOTION_API_URL", "").strip().rstrip("/")
