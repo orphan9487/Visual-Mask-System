@@ -127,19 +127,11 @@ def load_zh_dialogue(split="test", test_ratio=0.15, seed=42):
             for r in rows]
 
 
-def load_cped(split="test", to_traditional=True):
-    """
-    CPED（scutcyr/CPED）：對話式簡體中文情緒資料集，含 Dialogue_ID/Utterance_ID/Speaker。
-    - 自 GitHub 下載 {train,valid,test}_split.csv（首次下載後快取到 data/cped/）。
-    - OpenCC s2twp 簡→繁（台灣用語）。
-    - 依 Dialogue_ID 分組、Utterance_ID 排序 → 保留對話語境（這正是 ERC 重點）。
-    - Emotion 依 labels 的 "cped" 映射到 canonical；曖昧類別回 None → 自動過濾。
-    """
+def _cped_conversations(fname, to_traditional=True):
+    """載入單一 CPED CSV（首次下載後快取），依 Dialogue_ID 分組成一段段對話。"""
     import csv
     import urllib.request
 
-    fname = {"train": "train_split.csv", "valid": "valid_split.csv",
-             "test": "test_split.csv"}[split]
     cache_dir = PROJECT_ROOT / "data" / "cped"
     cache_dir.mkdir(parents=True, exist_ok=True)
     local = cache_dir / fname
@@ -156,18 +148,116 @@ def load_cped(split="test", to_traditional=True):
         cc = OpenCC("s2twp")
         convert = cc.convert
 
-    # 依 Dialogue_ID 分組，保留原始列序（＝Utterance_ID 序）
-    convs = {}
+    # 依 Dialogue_ID 分組，保留原始列序（＝Utterance_ID 序）；同時記下每段對話所屬劇集
+    convs, tv_of = {}, {}
     for r in rows:
         did = r.get("Dialogue_ID", "0")
+        tv_of.setdefault(did, r.get("TV_ID", "?"))
         convs.setdefault(did, []).append({
             "speaker": convert(r.get("Speaker", "Speaker")),
             "text": convert(r.get("Utterance", "")),
             "emotion": normalize_label(r.get("Emotion"), "cped"),
         })
-    print(f"[cped] split={split}：{len(convs)} 段對話、{len(rows)} 句"
+    return list(convs.values()), len(rows), [tv_of[d] for d in convs]
+
+
+def load_cped(split="test", to_traditional=True):
+    """
+    CPED（scutcyr/CPED）：對話式簡體中文情緒資料集，含 Dialogue_ID/Utterance_ID/Speaker。
+    - 自 GitHub 下載 {train,valid,test}_split.csv（首次下載後快取到 data/cped/）。
+    - OpenCC s2twp 簡→繁（台灣用語）。
+    - 依 Dialogue_ID 分組、Utterance_ID 排序 → 保留對話語境（這正是 ERC 重點）。
+    - Emotion 依 labels 的 "cped" 映射到 canonical；曖昧類別回 None → 自動過濾。
+    使用官方 train/valid/test 切分。若要「全資料 80/20 自訂切分」見 load_cped_resplit。
+    """
+    fname = {"train": "train_split.csv", "valid": "valid_split.csv",
+             "test": "test_split.csv"}[split]
+    convs, n_rows, _ = _cped_conversations(fname, to_traditional)
+    print(f"[cped] split={split}：{len(convs)} 段對話、{n_rows} 句"
           f"（已{'轉繁' if to_traditional else '保持簡體'}）")
-    return list(convs.values())
+    return convs
+
+
+def load_cped_resplit(split="test", test_ratio=0.2, seed=42, to_traditional=True, by="dialogue"):
+    """
+    CPED **全資料**自訂切分：彙整官方 train+valid+test，固定種子打亂後切成 80%/20%。
+    split="train" 回 80%，split="test" 回 20%。
+
+    by="dialogue"（資料集名 cped80）：按對話切。同一段對話不跨兩邊，但**同一部劇、
+        同一批角色會同時出現在訓練與測試**（實測測試句說話者 100% 見於訓練集），
+        測的是「看過的劇裡的新對話」，分數會偏高。
+    by="series"（資料集名 cped80series，建議）：按「整部劇」切，測試集的劇在訓練時
+        完全沒看過，與官方切分同一精神，測的是對新內容的泛化。
+        注意 CPED 的 TV_ID 其實是「季」（如《愛情公寓》27–31、《歡樂頌》5–6），
+        只按 TV_ID 切會讓同劇不同季的同一批角色跨兩邊；故先把共用 ≥2 個主要角色
+        （該季 ≥30 句、排除「其他」）的 TV_ID 併成同一部劇（40 個 TV_ID → 32 部劇）。
+        各劇長度不同，以「句數」逼近 test_ratio（劇洗牌後逐一考慮，加入會更接近目標才放進測試集）。
+    """
+    all_convs, all_tv = [], []
+    for fname in ("train_split.csv", "valid_split.csv", "test_split.csv"):
+        try:
+            convs, _, tvs = _cped_conversations(fname, to_traditional)
+            all_convs.extend(convs)
+            all_tv.extend(tvs)
+        except Exception as e:  # noqa: BLE001 — valid 可能不存在/下載失敗，略過
+            print(f"[cped] 略過 {fname}（{e}）")
+
+    import random
+    rng = random.Random(seed)   # 固定種子，train/test 切分可重現
+    if by == "series":
+        from collections import Counter
+        # 1) 每季的主要角色（≥30 句，排除通用標籤「其他」）
+        spk = {}
+        for c, tv in zip(all_convs, all_tv):
+            spk.setdefault(tv, Counter()).update(u["speaker"] for u in c if u["speaker"] != "其他")
+        major = {tv: {s for s, n in cnt.items() if n >= 30} for tv, cnt in spk.items()}
+        # 2) 共用 ≥2 個主要角色的季併成同一部劇（union-find）
+        parent = {tv: tv for tv in spk}
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+        tvs = sorted(spk, key=lambda t: int(t) if t.isdigit() else 0)
+        for i, a in enumerate(tvs):
+            for b in tvs[i + 1:]:
+                if len(major[a] & major[b]) >= 2:
+                    parent[find(a)] = find(b)
+        series = {}
+        for c, tv in zip(all_convs, all_tv):
+            series.setdefault(find(tv), []).append(c)
+        n_series = len(series)
+        # 3) 劇洗牌後逐一考慮：加入後句數更接近目標比例才放進測試集，否則跳過
+        #    （避免最後一部大劇讓比例大幅超標）
+        keys = sorted(series)
+        rng.shuffle(keys)
+        total = sum(len(c) for c in all_convs)
+        target = total * test_ratio
+        test_keys, n = [], 0
+        for k in keys:
+            size = sum(len(c) for c in series[k])
+            if abs(n + size - target) < abs(n - target):
+                test_keys.append(k)
+                n += size
+        test_set = set(test_keys)
+        test_convs = [c for k in keys if k in test_set for c in series[k]]
+        train_convs = [c for k in keys if k not in test_set for c in series[k]]
+        test_tvs = sorted((tv for tv in tvs if find(tv) in test_set), key=int)
+        desc = (f"按整部劇切：測試劇 {len(test_keys)}/{n_series} 部"
+                f"（TV_ID {test_tvs}）")
+    else:
+        rng.shuffle(all_convs)
+        n_test = int(len(all_convs) * test_ratio)
+        test_convs, train_convs = all_convs[:n_test], all_convs[n_test:]
+        desc = "按對話切"
+
+    chosen = test_convs if split == "test" else train_convs
+    n_utt = sum(len(c) for c in chosen)
+    n_all = sum(len(c) for c in all_convs)
+    print(f"[cped-resplit] {desc}；split={split}：{len(chosen)} 段、{n_utt} 句"
+          f"（佔全資料 {n_utt / n_all:.1%}，seed={seed}）")
+    return chosen
 
 
 # --------------------------------------------------------------------------- #
@@ -218,7 +308,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="qwen2.5-1.5b")
     ap.add_argument("--quant", default=None, choices=[None, "4bit", "8bit"])
-    ap.add_argument("--dataset", default="builtin", choices=["builtin", "csv", "meld", "zh", "cped"])
+    ap.add_argument("--dataset", default="builtin",
+                    choices=["builtin", "csv", "meld", "zh", "cped", "cped80", "cped80series"])
     ap.add_argument("--data_path", default=None)
     ap.add_argument("--split", default="test")
     ap.add_argument("--limit", type=int, default=None, help="最多評估幾句（省時）")
@@ -240,6 +331,10 @@ def main():
         conversations = load_zh_dialogue(args.split)
     elif args.dataset == "cped":
         conversations = load_cped(args.split)
+    elif args.dataset == "cped80":
+        conversations = load_cped_resplit(args.split)   # 全資料 80/20，按對話切（同劇洩漏）
+    elif args.dataset == "cped80series":
+        conversations = load_cped_resplit(args.split, by="series")   # 全資料 80/20，按整部劇切
     else:
         conversations = load_meld(args.split)
     n_utt = sum(len(c) for c in conversations)

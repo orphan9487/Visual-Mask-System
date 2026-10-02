@@ -150,7 +150,24 @@ def main():
     ap.add_argument("--free_vision", action="store_true", default=True,
                     help="訓練前把視覺塔移到 CPU 釋放 VRAM（純文字訓練用不到；4bit 下不適用）")
     ap.add_argument("--out", default="models/breeze2_erc_cped_lora")
+    # ---- 續訓 ----
+    ap.add_argument("--resume_adapter", default=None,
+                    help="從此 adapter 目錄（如 <out>_ckpt）載入 LoRA 權重續訓；"
+                         "若目錄內有 trainer_state.pt 也一併還原優化器/排程")
+    ap.add_argument("--start_step", type=int, default=0,
+                    help="續訓起始的優化步（排程快轉、跳過對應批次）；有 trainer_state.pt 時以其為準")
+    ap.add_argument("--seed", type=int, default=42, help="資料打亂種子（讓續訓可跳過已訓練批次）")
+    # ---- 顯存保護 ----
+    ap.add_argument("--mem_fraction", type=float, default=0.90,
+                    help="PyTorch 可用顯存比例上限。Windows 驅動在顯存不足時會默默溢出到"
+                         "系統記憶體（速度暴跌數倍且不報錯），設上限寧可報 OOM 也不要靜默變慢")
+    ap.add_argument("--empty_cache_every", type=int, default=50,
+                    help="每 N 個優化步清一次 CUDA 快取，避免快取隨時間膨脹（0=不清）")
     args = ap.parse_args()
+
+    if torch.cuda.is_available() and args.mem_fraction:
+        torch.cuda.set_per_process_memory_fraction(args.mem_fraction)
+        print(f"[train] 顯存上限：{args.mem_fraction:.0%}")
 
     from transformers import AutoTokenizer, AutoModel, BitsAndBytesConfig
     from transformers import get_cosine_schedule_with_warmup
@@ -227,6 +244,15 @@ def main():
     model = get_peft_model(model, lora)
     model.print_trainable_parameters()
 
+    if args.resume_adapter:
+        from peft import set_peft_model_state_dict
+        from safetensors.torch import load_file
+        sd = load_file(str(Path(args.resume_adapter) / "adapter_model.safetensors"))
+        res = set_peft_model_state_dict(model, sd)
+        n_unexp = len(getattr(res, "unexpected_keys", []) or [])
+        assert n_unexp == 0, f"續訓 adapter 有 {n_unexp} 個對不上的鍵，形狀/設定可能不同"
+        print(f"[train] 已載入續訓 adapter：{args.resume_adapter}（{len(sd)} 個張量）")
+
     # 確認 LoRA 只掛在 language_model（不應碰到 vision_model）
     lora_on_vision = [n for n, _ in model.named_parameters()
                       if "lora_" in n and "vision_model" in n]
@@ -249,14 +275,19 @@ def main():
     print(f"[train] 訓練樣本：{len(dataset)}")
 
     collate = Collator(tokenizer.pad_token_id)
-    loader = torch.utils.data.DataLoader(
-        dataset, batch_size=args.batch, shuffle=True, collate_fn=collate,
-    )
+
+    def make_loader(epoch):
+        # 每個 epoch 用固定種子（seed+epoch）打亂 → 順序可重現，續訓才能精確跳過已訓練批次
+        g = torch.Generator().manual_seed(args.seed + epoch)
+        return torch.utils.data.DataLoader(
+            dataset, batch_size=args.batch, shuffle=True, collate_fn=collate, generator=g,
+        )
 
     trainable = [p for p in model.parameters() if p.requires_grad]
     optim = torch.optim.AdamW(trainable, lr=args.lr)
 
-    steps_per_epoch = math.ceil(len(loader) / args.grad_accum)
+    n_batches = math.ceil(len(dataset) / args.batch)
+    steps_per_epoch = math.ceil(n_batches / args.grad_accum)
     total_steps = int(steps_per_epoch * args.epochs)
     sched = get_cosine_schedule_with_warmup(
         optim, int(total_steps * args.warmup_ratio), total_steps,
@@ -264,16 +295,42 @@ def main():
     print(f"[train] 優化步數：{total_steps}（每 epoch {steps_per_epoch} 步，"
           f"batch={args.batch} × grad_accum={args.grad_accum}）")
 
+    # ---- 續訓：還原優化器/排程，或快轉排程 ----
+    global_step = args.start_step
+    state_path = Path(args.resume_adapter) / "trainer_state.pt" if args.resume_adapter else None
+    if state_path is not None and state_path.exists():
+        st = torch.load(state_path, map_location="cpu")
+        optim.load_state_dict(st["optim"])
+        sched.load_state_dict(st["sched"])
+        global_step = st["global_step"]
+        print(f"[train] 已還原優化器/排程狀態（step {global_step}）")
+    elif global_step:
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")   # 未先 optim.step() 就 sched.step() 的警告
+            for _ in range(global_step):
+                sched.step()
+        print(f"[train] 排程快轉到 step {global_step}（無優化器狀態，AdamW 動量重新累積）")
+    if global_step:
+        print(f"[train] 從 step {global_step}/{total_steps} 續訓，lr={sched.get_last_lr()[0]:.2e}")
+
     # ---- 手寫訓練迴圈（透明可讀）----
     model.train()
     lm = model.base_model.model.language_model  # 直接對語言模型算 loss（略過複合 forward）
-    global_step = 0
     running = 0.0
     t0 = time.time()
+    t_last, s_last = t0, global_step
+    torch.cuda.reset_peak_memory_stats()
     n_epochs = int(math.ceil(args.epochs))
-    for epoch in range(n_epochs):
+    start_epoch = global_step // steps_per_epoch
+    for epoch in range(start_epoch, n_epochs):
+        skip = (global_step - epoch * steps_per_epoch) * args.grad_accum if epoch == start_epoch else 0
+        if skip:
+            print(f"[train] epoch {epoch}：跳過已訓練的 {skip} 個批次", flush=True)
         optim.zero_grad(set_to_none=True)
-        for it, batch in enumerate(loader):
+        for it, batch in enumerate(make_loader(epoch)):
+            if it < skip:
+                continue
             batch = {k: v.to("cuda") for k, v in batch.items()}
             out = lm(input_ids=batch["input_ids"],
                      attention_mask=batch["attention_mask"],
@@ -281,6 +338,9 @@ def main():
             loss = out.loss / args.grad_accum
             loss.backward()
             running += out.loss.item()
+            # 立刻釋放 logits（batch×seq×128k 詞表、float32，約 0.8GB），
+            # 不要讓它活到下一輪 forward 才被覆蓋
+            del out, loss, batch
 
             if (it + 1) % args.grad_accum == 0:
                 torch.nn.utils.clip_grad_norm_(trainable, 1.0)
@@ -288,18 +348,26 @@ def main():
                 sched.step()
                 optim.zero_grad(set_to_none=True)
                 global_step += 1
+                if args.empty_cache_every and global_step % args.empty_cache_every == 0:
+                    torch.cuda.empty_cache()
                 if global_step % 10 == 0:
                     avg = running / (10 * args.grad_accum)
                     running = 0.0
-                    elapsed = time.time() - t0
+                    now = time.time()
+                    rate = (now - t_last) / max(global_step - s_last, 1)
+                    t_last, s_last = now, global_step
+                    peak = torch.cuda.max_memory_reserved() / 2**30
+                    torch.cuda.reset_peak_memory_stats()
                     print(f"[train] step {global_step}/{total_steps} "
                           f"loss={avg:.4f} lr={sched.get_last_lr()[0]:.2e} "
-                          f"({elapsed:.0f}s)", flush=True)
+                          f"({now - t0:.0f}s, {rate:.1f}s/step, 顯存峰值 {peak:.1f}G)", flush=True)
                 if args.save_every and global_step % args.save_every == 0:
                     ckpt = args.out + "_ckpt"
                     Path(ckpt).mkdir(parents=True, exist_ok=True)
                     model.save_pretrained(ckpt)
-                    print(f"[train] 中途存檔 → {ckpt}（step {global_step}）", flush=True)
+                    torch.save({"optim": optim.state_dict(), "sched": sched.state_dict(),
+                                "global_step": global_step}, Path(ckpt) / "trainer_state.pt")
+                    print(f"[train] 中途存檔 → {ckpt}（step {global_step}，含優化器狀態）", flush=True)
                 if global_step >= total_steps:
                     break
         if global_step >= total_steps:
