@@ -26,6 +26,20 @@ ERC_QUANT = (
     else _quantization
 )
 
+# ERC 推理模式：two_stage（先推理鏈再標籤，純底座時較能壓低幻覺）或 single（直接出標籤）。
+# 微調 adapter 是用單次格式訓練的，搭配 single 最一致、也快一倍，但不會產生推理鏈文字。
+ERC_TWO_STAGE = os.getenv("VMS_ERC_MODE", "two_stage").strip().lower() != "single"
+
+# 選用的 ERC LoRA adapter（留空＝跑純底座）。相對路徑以專案根解析。
+_lora = os.getenv("VMS_LORA_PATH", "").strip()
+if _lora:
+    _lora_path = Path(_lora)
+    if not _lora_path.is_absolute():
+        _lora_path = PROJECT_ROOT / _lora_path
+    ERC_LORA_PATH = str(_lora_path)
+else:
+    ERC_LORA_PATH = None
+
 # Optional dependency-isolated emotion service. Keeping this URL empty runs
 # Breeze2 in the WebSocket process exactly as before.
 EMOTION_API_URL = os.getenv("VMS_EMOTION_API_URL", "").strip().rstrip("/")

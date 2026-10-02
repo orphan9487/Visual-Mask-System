@@ -27,13 +27,18 @@ for _s in (sys.stdout, sys.stderr):
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from src.evaluation.eval_erc import load_cped, load_meld, load_zh_dialogue
+from src.evaluation.eval_erc import (load_cped, load_cped_resplit, load_meld,
+                                     load_zh_dialogue)
 from src.reasoning.labels import CANONICAL_EMOTIONS
 from src.reasoning.prompts import context_block, label_user_prompt, system_prompt
 
 OUT_DIR = Path(__file__).resolve().parents[2] / "data" / "erc_sft"
 
-LOADERS = {"meld": load_meld, "zh": load_zh_dialogue, "cped": load_cped}
+LOADERS = {"meld": load_meld, "zh": load_zh_dialogue, "cped": load_cped,
+           # 全資料 80/20，split=train 取 80%。cped80 按對話切（同劇角色會洩漏到測試），
+           # cped80series 按整部劇切（測試劇完全沒看過，建議用這個）
+           "cped80": load_cped_resplit,
+           "cped80series": lambda split: load_cped_resplit(split, by="series")}
 
 
 def build_samples(dataset: str, split: str, history_turns: int, limit: int | None):
@@ -60,7 +65,8 @@ def build_samples(dataset: str, split: str, history_turns: int, limit: int | Non
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dataset", default="meld", choices=["meld", "zh", "cped"])
+    ap.add_argument("--dataset", default="meld",
+                    choices=["meld", "zh", "cped", "cped80", "cped80series"])
     ap.add_argument("--split", default="train")
     ap.add_argument("--history_turns", type=int, default=6)
     ap.add_argument("--limit", type=int, default=None)

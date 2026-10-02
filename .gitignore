@@ -61,6 +61,11 @@ data/processed/
 data/faceid_profiles/
 data/train_dataset_v2/
 data/external/
+# ERC SFT 資料集（可由 format_meld / build_sarcasm_sft 重生成，體積大）
+data/erc_sft/
+data/cped/
+# 執行期使用者對話記錄（含個資，勿提交）
+data/*.db
 *.zip
 *.tar
 *.tar.gz
