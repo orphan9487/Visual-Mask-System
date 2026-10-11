@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable
+from src.config import inference as inference_config
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -114,7 +115,9 @@ class PipelineService:
         safe_history = [
             {"role": str(item.get("role", "user")),
              "content": str(item.get("content", ""))[:1000]}
-            for item in history[-12:]
+            # 只保留最近 N 句（N＝語境視窗設定），與 ERC 實際使用的語境一致
+            for item in (history[-inference_config.ERC_HISTORY_TURNS:]
+                         if inference_config.ERC_HISTORY_TURNS else [])
             if isinstance(item, dict) and item.get("content")
         ]
         payload = await self._analyzer(

@@ -57,3 +57,22 @@ async def predict_remote(
         token=token,
         timeout=timeout,
     )
+
+
+async def explain_remote(
+    text: str,
+    history: list[dict],
+    emotion: str,
+    *,
+    speaker: str | None = None,
+    base_url: str,
+    token: str = "",
+    timeout: float = 120.0,
+) -> dict[str, Any]:
+    return await asyncio.to_thread(
+        _post_json,
+        f"{base_url.rstrip('/')}/explain",
+        {"text": text, "history": history, "emotion": emotion, "speaker": speaker},
+        token=token,
+        timeout=timeout,
+    )

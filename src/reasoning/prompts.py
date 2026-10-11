@@ -71,3 +71,24 @@ def label_user_prompt(context: str, utterance: str) -> str:
         f"Choose exactly ONE label from these seven: [{LABEL_LINE}]. "
         f"Output only that one word — nothing outside the seven."
     )
+
+
+# --------------------------------------------------------------------------- #
+# 按需解釋（判讀改為單次後，M-CoT 的推理鏈改成「使用者要求時才產生」）
+# --------------------------------------------------------------------------- #
+EXPLAIN_SYSTEM = "你是對話情緒分析助手，負責用繁體中文向使用者解釋一句話被判讀成某種情緒的理由。"
+
+
+def explain_user_prompt(context: str, speaker: str | None, utterance: str,
+                        label: str) -> str:
+    """請模型為「已判讀出的標籤」寫 2–3 句理由。這是事後說明，不會改變判讀結果。"""
+    from .labels import EMOTION_ZH
+    zh = EMOTION_ZH.get(label, label)
+    who = f"{speaker}: " if speaker else ""
+    return (
+        f"[對話前文]\n{context}\n\n"
+        f"[當前這句話]\n{who}{utterance}\n\n"
+        f"[判讀結果]\n{zh}（{label}）\n\n"
+        f"請用繁體中文、2 到 3 句話說明為什麼這句話會被判讀為「{zh}」：指出前文中哪些內容"
+        f"影響了語氣、這句話是真心還是反話。直接說明理由，不要重述題目，不要更改判讀結果。"
+    )

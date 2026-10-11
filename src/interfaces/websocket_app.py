@@ -7,7 +7,7 @@ import json
 import uuid
 from collections import deque
 from pathlib import Path
-from typing import Literal
+from typing import Awaitable, Callable, Literal
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,6 +25,7 @@ from db.lora_repo import get_user_active_lora, get_user_loras, set_user_active_l
 from db.user_repo import verify_login
 from src.reasoning.identity_db import identity_db
 from src.services.pipeline_service import PipelineAnalysis, PipelineService, pipeline
+from src.services.emotion_service import explain_emotion
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -49,6 +50,10 @@ class EmotionFeedbackRequest(BaseModel):
         "neutral", "joy", "sadness", "anger", "surprise", "fear", "disgust"
     ]
     msg_id: str | None = None
+
+
+class ExplainRequest(BaseModel):
+    msg_id: str
 
 
 class IntensityFeedbackRequest(BaseModel):
@@ -110,7 +115,10 @@ def _public_analysis_payload(
     }
 
 
-def create_app(pipeline_service: PipelineService = pipeline) -> FastAPI:
+def create_app(
+    pipeline_service: PipelineService = pipeline,
+    explainer: Callable[..., Awaitable[dict]] = explain_emotion,
+) -> FastAPI:
     app = FastAPI(title="Visual Mask WebSocket Chat")
     app.add_middleware(
         CORSMiddleware,
@@ -122,9 +130,17 @@ def create_app(pipeline_service: PipelineService = pipeline) -> FastAPI:
     app.mount("/output", StaticFiles(directory=str(OUTPUT_ROOT)), name="output")
 
     manager = ConnectionManager()
-    histories: dict[str, deque[dict[str, str]]] = {}
+    # 聊天室共用語境：所有人的發言依時間序記錄，格式「發話者: 內容」，與微調資料的
+    # 「角色: 台詞」一致。只放真實發言，不放模型的預測標籤（訓練語境裡從未出現標籤，
+    # 放進去會造成訓練/推論不一致，且上一則判錯會連帶影響下一則）。
+    room_history: deque[dict[str, str]] = deque(
+        maxlen=max(inference_config.ERC_HISTORY_TURNS, 1))
     last_context: dict[str, tuple[str, str, float]] = {}
     feedback_contexts: dict[tuple[str, str], tuple[str, str, float]] = {}
+    # 按需解釋：msg_id → 判讀當下的語境快照（任何人都能對任一則訊息按「為什麼？」）。
+    # explanations 快取已成功產生的說明，同一則不重複呼叫模型。
+    explain_contexts: dict[str, dict] = {}
+    explanations: dict[str, str] = {}
 
     @app.get("/")
     async def homepage():
@@ -175,6 +191,24 @@ def create_app(pipeline_service: PipelineService = pipeline) -> FastAPI:
         save_emotion_feedback(req.username, context, wrong_label, req.correct_label)
         return {"message": f"情緒反饋已記錄（{wrong_label} → {req.correct_label}）"}
 
+    @app.post("/api/explain")
+    async def explain(req: ExplainRequest):
+        if req.msg_id in explanations:
+            return {"msg_id": req.msg_id, "explanation": explanations[req.msg_id],
+                    "cached": True}
+        ctx = explain_contexts.get(req.msg_id)
+        if ctx is None:
+            raise HTTPException(status_code=404,
+                                detail="找不到這則訊息的分析紀錄（可能已過期或伺服器重啟過）")
+        result = await explainer(ctx["text"], ctx["history"], ctx["emotion"],
+                                 speaker=ctx["speaker"])
+        text = str(result.get("explanation", "")).strip()
+        if result.get("source") == "llm" and text:   # 只快取成功的說明，失敗的可重試
+            explanations[req.msg_id] = text
+            if len(explanations) > 1000:
+                explanations.pop(next(iter(explanations)))
+        return {"msg_id": req.msg_id, "explanation": text, "cached": False}
+
     @app.post("/api/intensity_feedback")
     def intensity_feedback(req: IntensityFeedbackRequest):
         save_intensity_feedback(
@@ -193,7 +227,6 @@ def create_app(pipeline_service: PipelineService = pipeline) -> FastAPI:
     @app.websocket("/ws/{client_name}")
     async def websocket_endpoint(websocket: WebSocket, client_name: str):
         await manager.connect(websocket, client_name)
-        history = histories.setdefault(client_name, deque(maxlen=12))
         try:
             while True:
                 text = (await websocket.receive_text()).strip()
@@ -205,15 +238,19 @@ def create_app(pipeline_service: PipelineService = pipeline) -> FastAPI:
                     mask_id = "human"
                 display_name = identity_db.masks[mask_id].display_name or mask_id
 
+                # 先取「這句之前」的語境快照，再立刻把這句記進聊天室語境。
+                # 收到就記（而非分析完才記），他人在本句分析期間發言時也看得到本句。
+                context_turns = (list(room_history)
+                                 if inference_config.ERC_HISTORY_TURNS else [])
+                room_history.append({"role": client_name, "content": text})
+
                 try:
                     analysis = await pipeline_service.analyze(
                         text,
-                        list(history),
+                        context_turns,
                         user_id=client_name,
                         mask_id=mask_id,
                     )
-                    history.append({"role": "user", "content": text})
-                    history.append({"role": "assistant", "content": analysis.emotion})
                     context = json.dumps(
                         {"history": analysis.history, "text": text},
                         ensure_ascii=False,
@@ -224,6 +261,12 @@ def create_app(pipeline_service: PipelineService = pipeline) -> FastAPI:
                         analysis.base_intensity,
                     )
                     feedback_contexts[(client_name, msg_id)] = last_context[client_name]
+                    explain_contexts[msg_id] = {
+                        "text": text, "history": analysis.history,
+                        "emotion": analysis.emotion, "speaker": client_name,
+                    }
+                    if len(explain_contexts) > 1000:
+                        explain_contexts.pop(next(iter(explain_contexts)))
                     if len(feedback_contexts) > 1000:
                         feedback_contexts.pop(next(iter(feedback_contexts)))
                     await manager.broadcast(_public_analysis_payload(
