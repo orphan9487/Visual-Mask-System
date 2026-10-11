@@ -47,6 +47,7 @@ DATASET_LABEL_MAP = {
         "happy": "joy",
         "sad": "sadness",
         "angry": "anger",
+        "anger": "anger",      # 官方 annotation.json 實際用 "Anger"（漏掉會靜默丟掉全部 anger）
         "surprise": "surprise",
         "fear": "fear",
         "disgust": "disgust",

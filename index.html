@@ -149,6 +149,13 @@
   .ap-label .ico{width:12px;height:12px}
   .ap-rationale{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 13px;
     font-size:.85rem;line-height:1.65;color:var(--ink)}
+  .ap-explain-btn{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:8px;
+    border:1px solid var(--accent);background:var(--accent-bg);color:var(--accent);font:inherit;
+    font-size:.82rem;cursor:pointer}
+  .ap-explain-btn:hover{filter:brightness(1.05)}
+  .ap-explain-wait{color:var(--muted)}
+  .ap-explain-err{color:var(--muted);margin-bottom:8px}
+  .ap-note{margin-top:8px;font-size:.74rem;color:var(--muted)}
   .ap-fb{margin-top:22px;display:flex;gap:9px}
   .ap-fbbtn{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:10px;
     border:1px solid var(--border-2);border-radius:10px;background:var(--surface);color:var(--muted);
@@ -320,7 +327,7 @@
           <div class="ap-bar"><i id="apBar" style="width:0"></i></div>
         </div>
         <div class="ap-section">
-          <div class="ap-label"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 1 4 10.5c-.7.7-1 1.3-1 2.5H9c0-1.2-.3-1.8-1-2.5A6 6 0 0 1 12 3Z"/></svg>推理鏈</div>
+          <div class="ap-label"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 1 4 10.5c-.7.7-1 1.3-1 2.5H9c0-1.2-.3-1.8-1-2.5A6 6 0 0 1 12 3Z"/></svg>判讀理由</div>
           <div class="ap-rationale" id="apRationale"></div>
         </div>
         <div class="ap-fb" id="apFb"></div>
@@ -417,6 +424,38 @@ function renderCompound(a){
     return `<span class="epill" style="background:${c}22;color:${c}"><span class="d" style="background:${c}"></span>${zh}<span class="rk">${srcTxt(e)}</span></span>`;
   }).join('<span class="plus">＋</span>');
 }
+/* 判讀理由：判讀改為單次後，理由改成「按需產生」（使用者按下才呼叫模型，結果由後端快取）。
+   這是模型對已判讀標籤的事後說明，不是判讀當下的推理過程，所以在畫面上註明僅供參考。 */
+function renderRationale(a,key){
+  const box=document.getElementById("apRationale");
+  box.textContent="";
+  if(a.rationale){
+    const p=document.createElement("div");p.textContent=a.rationale;box.appendChild(p);
+    if(a.explained){const n=document.createElement("div");n.className="ap-note";
+      n.textContent="模型事後產生的說明，僅供參考";box.appendChild(n);}
+    return;
+  }
+  if(a.explaining){const w=document.createElement("div");w.className="ap-explain-wait";
+    w.textContent="產生說明中…";box.appendChild(w);return;}
+  if(a.explainError){const e=document.createElement("div");e.className="ap-explain-err";
+    e.textContent=a.explainError;box.appendChild(e);}
+  const b=document.createElement("button");b.className="ap-explain-btn";
+  b.textContent=a.explainError?"重試":"為什麼判成這個情緒？";
+  b.onclick=(ev)=>{ev.stopPropagation();explainMessage(key);};
+  box.appendChild(b);
+}
+async function explainMessage(key){
+  const a=analyses[key]; if(!a||a.explaining)return;
+  a.explaining=true;a.explainError=null;
+  if(selectedKey===key)renderPanel();
+  try{
+    const res=await fetch(`${HTTP_BASE}/api/explain`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({msg_id:key})});
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok)throw new Error(data.detail||`HTTP ${res.status}`);
+    a.rationale=data.explanation||"（模型沒有產生說明）";a.explained=true;
+  }catch(err){a.explainError=`無法產生說明：${err.message}`;}
+  finally{a.explaining=false;if(selectedKey===key)renderPanel();}
+}
 function renderPanel(){
   const empty=document.getElementById("apEmpty"), content=document.getElementById("apContent");
   const a=selectedKey?analyses[selectedKey]:null;
@@ -430,7 +469,7 @@ function renderPanel(){
   const v=Math.max(0,Math.min(1,a.baseIntensity||0));
   document.getElementById("apIntensityVal").textContent=v.toFixed(2);
   document.getElementById("apBar").style.width=Math.round(v*100)+"%";
-  document.getElementById("apRationale").textContent=a.rationale||"（本則沒有推理鏈）";
+  renderRationale(a,selectedKey);
   const fb=document.getElementById("apFb");
   if(a.mine&&a.done){
     if(a.fb==="liked"){fb.innerHTML=`<div class="ap-fbmsg liked">${ico("up","f")}已標記準確</div>`;}

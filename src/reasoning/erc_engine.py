@@ -23,7 +23,8 @@ from .labels import (
     EMOTION_ZH,
     coerce_prediction,
 )
-from .prompts import LABEL_LINE, context_block, label_user_prompt, system_prompt
+from .prompts import (EXPLAIN_SYSTEM, LABEL_LINE, context_block, explain_user_prompt,
+                      label_user_prompt, system_prompt)
 
 
 @dataclass
@@ -46,15 +47,24 @@ class ERCStats:
 
 
 class ERCEngine:
-    def __init__(self, backbone, use_context: bool = True, two_stage: bool = True):
+    def __init__(self, backbone, use_context: bool = True, two_stage: bool = True,
+                 label_bias: Optional[list[float]] = None, scorer=None):
         """
         backbone     : src.reasoning.backbone.Backbone 實例
         use_context  : 是否餵入對話歷史（消融開關）
         two_stage    : True = 真兩階段(Rationale→Label)；False = 單次直接出標籤(對照組)
+        label_bias   : 單次模式的先驗校正（依 CANONICAL_EMOTIONS 順序的 7 個值）。給定時改以
+                       「7 標籤各算 log p + bias 取最大」判讀，而非讓模型生成標籤；
+                       用於修正訓練資料降檔 neutral 造成的中性低估（見 configs/erc_calibration.json）。
+        scorer       : 打分器（測試注入用）；預設延遲建立 label_scorer.LabelScorer。
         """
         self.bk = backbone
         self.use_context = use_context
         self.two_stage = two_stage
+        self.label_bias = list(label_bias) if label_bias is not None else None
+        if self.label_bias is not None and len(self.label_bias) != len(CANONICAL_EMOTIONS):
+            raise ValueError(f"label_bias 需 {len(CANONICAL_EMOTIONS)} 個值")
+        self._scorer = scorer
         self.stats = ERCStats()
 
     # ------------------------------------------------------------------ #
@@ -95,6 +105,14 @@ class ERCEngine:
     def _single_pass(self, context: str, utterance: str) -> str:
         # 與訓練樣本完全同一個 user prompt（共用 prompts.label_user_prompt）
         user = label_user_prompt(context, utterance)
+        if self.label_bias is not None:
+            if self._scorer is None:
+                from .label_scorer import LabelScorer
+                self._scorer = LabelScorer(self.bk)
+            scores = self._scorer.score(self._system_prompt_cache, user)
+            best = max(range(len(CANONICAL_EMOTIONS)),
+                       key=lambda i: scores[i] + self.label_bias[i])
+            return CANONICAL_EMOTIONS[best]
         return self.bk.chat(self._system_prompt_cache, user, max_new_tokens=10)
 
     # ------------------------------------------------------------------ #
@@ -131,6 +149,19 @@ class ERCEngine:
             parse_ok=parse_ok,
             used_context=self.use_context,
         )
+
+    def explain(self, utterance: str, label: str, history=None,
+                speaker: Optional[str] = None) -> str:
+        """
+        按需解釋：為已判讀出的 label 產生 2–3 句繁中理由（M-CoT 的推理鏈改為按需提供）。
+        以**底座模型**產生（暫停 adapter）：adapter 被微調成只輸出標籤，寫不出完整說明。
+        這是事後說明，不是判讀當下的推理過程，僅供參考。
+        """
+        context = self._context_block(history)
+        with self.bk.adapter_disabled():
+            return self.bk.chat(EXPLAIN_SYSTEM,
+                                explain_user_prompt(context, speaker, utterance, label),
+                                max_new_tokens=200).strip()
 
     # ------------------------------------------------------------------ #
     def to_generation_decision(self, result: ERCResult) -> dict:

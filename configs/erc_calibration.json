@@ -1,0 +1,15 @@
+{
+  "_說明": "ERC 先驗校正參數：score'(y) = log p(y|x) + alpha * shift[y]。shift = log π_自然 − log π_訓練，修正保反諷配方把 neutral 降到 20% 造成的中性低估。shift 只由訓練資料統計（cped80series_train.jsonl 降檔前 vs cped80series_sarcasm_train.jsonl 降檔後）；alpha 在 M3ED 驗證集 6000 句上選定（Macro-F1 最高）。僅適用於下列 adapter，換 adapter 必須重算（src/evaluation/calibrate_erc.py）。",
+  "adapter": "breeze2_erc_cped80series_sarcasm_lora",
+  "alpha": 0.5,
+  "shift": {
+    "neutral": 0.7332,
+    "joy": -0.3148,
+    "sadness": -0.3041,
+    "anger": -0.3157,
+    "surprise": -0.2858,
+    "fear": -0.2858,
+    "disgust": -0.6255
+  },
+  "test_result": "CPED 6 部未見劇 n=20925：W-F1 0.434→0.442（Δ 95%CI +0.005~+0.013）、Macro 0.367→0.366、neutral F1 0.50→0.55、recall 0.46→0.63；fear F1 0.33→0.30"
+}

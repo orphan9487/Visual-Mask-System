@@ -10,6 +10,7 @@
 使 3B/7B 模型也能塞入。此設計直接對應計畫書「資源受限下的可行性」論述。
 """
 
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -55,6 +56,13 @@ class Backbone:
         print(f"[backbone] 套用 LoRA adapter：{lora_path}")
         self.model = PeftModel.from_pretrained(self.model, lora_path)
         self.model.eval()
+
+    def adapter_disabled(self):
+        """暫時停用 LoRA adapter（回到底座模型）的 context manager；沒有 adapter 時不做事。
+        注意：這會改變共用模型的狀態，呼叫端須以鎖保護，避免同時間的判讀跑在無 adapter 狀態。"""
+        if hasattr(self.model, "disable_adapter"):
+            return self.model.disable_adapter()
+        return nullcontext()
 
     # ------------------------------------------------------------------ #
     def _quant_config(self):

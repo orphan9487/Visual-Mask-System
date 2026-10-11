@@ -35,6 +35,28 @@ def _mock_predict(text: str) -> str:
     return "neutral"
 
 
+def _load_label_bias() -> list[float] | None:
+    """讀先驗校正參數，回傳依 CANONICAL_EMOTIONS 順序的 alpha*shift；不適用時回 None。"""
+    import json
+    from pathlib import Path
+    path = Path(config.ERC_CALIB_PATH)
+    if not path.exists():
+        return None
+    cal = json.loads(path.read_text(encoding="utf-8"))
+    alpha = cal.get("alpha", 0.0) if config.ERC_CALIB_ALPHA is None else config.ERC_CALIB_ALPHA
+    if not alpha:
+        return None
+    lora_name = Path(config.ERC_LORA_PATH).name if config.ERC_LORA_PATH else None
+    if cal.get("adapter") != lora_name:
+        # 校正量是針對特定 adapter 的訓練分布算的，套到別的 adapter 會錯
+        print(f"[erc][warn] 校正參數適用 {cal.get('adapter')}，目前 adapter 為 {lora_name}，不套用校正")
+        return None
+    bias = [alpha * cal["shift"][k] for k in CANONICAL_EMOTIONS]
+    print(f"[erc] 先驗校正 alpha={alpha}：" + " ".join(f"{k}{b:+.2f}"
+                                                  for k, b in zip(CANONICAL_EMOTIONS, bias)))
+    return bias
+
+
 def _get_engine():
     """延遲載入 ERC 引擎（執行緒安全，只載入一次）。"""
     global _engine
@@ -50,7 +72,9 @@ def _get_engine():
                 bk = Backbone(BackboneConfig(model=config.ERC_MODEL,
                                              quantization=config.ERC_QUANT,
                                              lora_path=config.ERC_LORA_PATH))
-                _engine = ERCEngine(bk, use_context=True, two_stage=config.ERC_TWO_STAGE)
+                bias = None if config.ERC_TWO_STAGE or not bk.is_internvl else _load_label_bias()
+                _engine = ERCEngine(bk, use_context=True, two_stage=config.ERC_TWO_STAGE,
+                                    label_bias=bias)
                 print("[erc] 模型就緒")
     return _engine
 
@@ -58,6 +82,10 @@ def _get_engine():
 # 過長輸入截斷（避免拖慢/撐爆模型），及模型故障後永久退回關鍵字規則的旗標
 MAX_INPUT_CHARS = 500
 _engine_broken = False
+
+# 共用模型的推論鎖：判讀、意圖解碼、按需解釋都用同一個 backbone。解釋時會暫停
+# adapter（改變模型狀態），若不加鎖，同時進來的判讀可能跑在「無 adapter」狀態。
+_infer_lock = threading.Lock()
 
 
 def _predict_sync(
@@ -77,12 +105,13 @@ def _predict_sync(
     # 真實推理：任何失敗（OOM/逾時/載入錯誤）都退回關鍵字規則，確保永不當機
     try:
         engine = _get_engine()
-        res = engine.predict(
-            text,
-            history=history,
-            speaker_prior=speaker_prior,
-            correction_examples=correction_examples,
-        )
+        with _infer_lock:
+            res = engine.predict(
+                text,
+                history=history,
+                speaker_prior=speaker_prior,
+                correction_examples=correction_examples,
+            )
         return {"emotion": res.predicted or "neutral", "rationale": res.rationale,
                 "parse_ok": res.parse_ok, "source": "llm"}
     except Exception as e:  # noqa: BLE001
@@ -145,6 +174,43 @@ async def predict_emotion(
         )
 
 
+def _explain_sync(text: str, history: list[dict], emotion: str,
+                  speaker: str | None = None) -> dict:
+    """按需解釋：為已判讀的 emotion 產生繁中理由（事後說明，不改變判讀）。"""
+    text = (text or "")[:MAX_INPUT_CHARS]
+    if config.MOCK_MODE or _engine_broken:
+        return {"emotion": emotion, "source": "mock",
+                "explanation": "（目前為關鍵字規則模式，沒有模型可以產生說明）"}
+    try:
+        engine = _get_engine()
+        with _infer_lock:
+            out = engine.explain(text, emotion, history=history, speaker=speaker)
+        return {"emotion": emotion, "explanation": out or "（模型沒有產生說明）",
+                "source": "llm"}
+    except Exception as e:  # noqa: BLE001
+        print(f"[explain][warn] 說明產生失敗：{type(e).__name__}: {e}")
+        return {"emotion": emotion, "explanation": "（說明產生失敗，請稍後再試）",
+                "source": "fallback"}
+
+
+async def explain_emotion(text: str, history: list[dict], emotion: str,
+                          speaker: str | None = None) -> dict:
+    """設定了獨立推論服務就交給它，否則本機產生（與 predict_emotion 同一套分派）。"""
+    if config.EMOTION_API_URL:
+        from .emotion_inference_client import RemoteEmotionInferenceError, explain_remote
+        try:
+            return await explain_remote(
+                text, history, emotion, speaker=speaker,
+                base_url=config.EMOTION_API_URL, token=config.EMOTION_API_TOKEN,
+                timeout=config.EMOTION_API_TIMEOUT,
+            )
+        except RemoteEmotionInferenceError as exc:
+            if not config.EMOTION_API_FALLBACK_LOCAL:
+                raise
+            print(f"[explain][warn] remote unavailable; using local fallback: {exc}")
+    return await asyncio.to_thread(_explain_sync, text, history, emotion, speaker)
+
+
 _intent_decoder = None
 
 
@@ -162,7 +228,10 @@ def _decode_intent_sync(text: str, history: list[dict], emotion: str) -> dict | 
         return None
     try:
         dec = _get_intent_decoder()
-        return dec.decode(text, history=history, emotion=emotion).to_dict() if dec else None
+        if not dec:
+            return None
+        with _infer_lock:
+            return dec.decode(text, history=history, emotion=emotion).to_dict()
     except Exception as e:  # noqa: BLE001
         print(f"[intent][warn] 意圖解碼失敗，略過：{type(e).__name__}: {e}")
         return None

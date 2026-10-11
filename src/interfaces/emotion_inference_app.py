@@ -10,7 +10,11 @@ from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
 from ..reasoning.labels import CANONICAL_EMOTIONS
-from ..services.emotion_service import predict_emotion_local, status as inference_status
+from ..services.emotion_service import (
+    _explain_sync,
+    predict_emotion_local,
+    status as inference_status,
+)
 
 
 class HistoryItem(BaseModel):
@@ -28,17 +32,32 @@ class CorrectionExample(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     text: str = Field(min_length=1, max_length=500)
-    history: list[HistoryItem] = Field(default_factory=list, max_length=12)
+    history: list[HistoryItem] = Field(default_factory=list, max_length=50)
     speaker_prior: str | None = Field(default=None, max_length=2000)
     correction_examples: list[CorrectionExample] = Field(
         default_factory=list, max_length=5
     )
 
 
+class ExplainRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+    history: list[HistoryItem] = Field(default_factory=list, max_length=50)
+    emotion: Literal[
+        "neutral", "joy", "sadness", "anger", "surprise", "fear", "disgust"
+    ]
+    speaker: str | None = Field(default=None, max_length=100)
+
+
 Predictor = Callable[..., Awaitable[dict]]
+Explainer = Callable[..., Awaitable[dict]]
 
 
-def create_app(predictor: Predictor = predict_emotion_local) -> FastAPI:
+async def _explain_local(text, history, emotion, speaker=None) -> dict:
+    return await asyncio.to_thread(_explain_sync, text, history, emotion, speaker)
+
+
+def create_app(predictor: Predictor = predict_emotion_local,
+               explainer: Explainer = _explain_local) -> FastAPI:
     app = FastAPI(title="Visual Mask Emotion Inference", docs_url=None, redoc_url=None)
     expected_token = os.getenv("VMS_EMOTION_API_TOKEN", "").strip()
     inference_lock = asyncio.Lock()
@@ -73,6 +92,18 @@ def create_app(predictor: Predictor = predict_emotion_local) -> FastAPI:
             "emotion": emotion,
             "rationale": str(result.get("rationale", "")),
             "parse_ok": bool(result.get("parse_ok", False)),
+            "source": str(result.get("source", "llm")),
+        }
+
+    @app.post("/explain")
+    async def explain(payload: ExplainRequest, _: None = Depends(authorize)) -> dict:
+        history = [item.model_dump() for item in payload.history]
+        async with inference_lock:
+            result = await explainer(payload.text.strip(), history, payload.emotion,
+                                     speaker=payload.speaker)
+        return {
+            "emotion": payload.emotion,
+            "explanation": str(result.get("explanation", "")),
             "source": str(result.get("source", "llm")),
         }
 

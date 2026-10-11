@@ -116,6 +116,160 @@ class WebSocketAppTests(unittest.TestCase):
             self.assertEqual(alice_done["msg_id"], alice_generating["msg_id"])
             self.assertEqual(bob_done["mask_file"], "integration/result.png")
 
+    def test_context_is_shared_room_history_without_labels(self):
+        """語境＝聊天室所有人的發言（含對方），不含模型預測標籤，且受視窗大小限制。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "result.png"
+            output.write_bytes(b"image")
+            seen_contexts = []
+
+            class RecordingPipeline:
+                async def analyze(self, text, history, **kwargs):
+                    seen_contexts.append(list(history))
+                    return PipelineAnalysis(
+                        payload={
+                            "emotion": "anger",
+                            "emotions": [{"emotion": "anger", "role": "primary",
+                                          "source": "context"}],
+                            "compound_name": "",
+                            "instruction": {
+                                "identity": {"mask_id": kwargs["mask_id"]},
+                                "emotion": "anger",
+                                "intensity": 0.5,
+                                "source": {"rationale": ""},
+                            },
+                        },
+                        text=text,
+                        history=history,
+                        user_id=kwargs["user_id"],
+                    )
+
+                async def generate(self, analysis, **_kwargs):
+                    return PipelineResult(
+                        emotion=analysis.emotion,
+                        mask_id=analysis.mask_id,
+                        output_path=output,
+                        public_path="integration/result.png",
+                        base_intensity=0.5,
+                        effective_intensity=0.5,
+                        processing_ms=1,
+                    )
+
+            # 視窗設 2，以便用少量訊息驗證「超出視窗的舊發言會被捨棄」
+            with patch.object(websocket_app.inference_config, "ERC_HISTORY_TURNS", 2):
+                app = websocket_app.create_app(RecordingPipeline())
+            with (
+                patch.object(websocket_app.inference_config, "EMOTION_API_URL", ""),
+                patch.object(websocket_app, "get_user_active_lora", return_value="human"),
+                patch.object(websocket_app, "get_intensity_multiplier", return_value=1.0),
+                TestClient(app) as client,
+            ):
+                with (
+                    client.websocket_connect("/ws/alice") as alice,
+                    client.websocket_connect("/ws/bob") as bob,
+                ):
+                    def say(sender, text):
+                        sender.send_text(text)
+                        for ws in (alice, bob):   # 每則訊息廣播 generating + done
+                            ws.receive_json()
+                            ws.receive_json()
+
+                    say(alice, "你把我的資料庫刪光了")
+                    say(bob, "真好啊")
+                    say(alice, "對不起啦")
+                    say(bob, "哼")
+
+        a1 = {"role": "alice", "content": "你把我的資料庫刪光了"}
+        b1 = {"role": "bob", "content": "真好啊"}
+        a2 = {"role": "alice", "content": "對不起啦"}
+        self.assertEqual(seen_contexts[0], [])
+        self.assertEqual(seen_contexts[1], [a1])        # bob 看得到 alice 的話
+        self.assertEqual(seen_contexts[2], [a1, b1])
+        self.assertEqual(seen_contexts[3], [b1, a2])    # 視窗 2：最舊的 a1 被捨棄
+        for ctx in seen_contexts:                        # 語境裡不得出現預測標籤
+            self.assertTrue(all(turn["role"] in ("alice", "bob") for turn in ctx))
+
+    def test_explain_on_demand_uses_message_context_and_caches(self):
+        """按需解釋：用該則訊息當下的語境與標籤呼叫解釋器；成功才快取，失敗可重試。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "result.png"
+            output.write_bytes(b"image")
+            calls = []
+            replies = [
+                {"explanation": "（說明產生失敗，請稍後再試）", "source": "fallback"},
+                {"explanation": "前文說資料庫被刪，這句是反話。", "source": "llm"},
+            ]
+
+            async def explainer(text, history, emotion, speaker=None):
+                calls.append({"text": text, "history": history,
+                              "emotion": emotion, "speaker": speaker})
+                return replies[len(calls) - 1]
+
+            class Pipeline:
+                async def analyze(self, text, history, **kwargs):
+                    return PipelineAnalysis(
+                        payload={
+                            "emotion": "disgust",
+                            "emotions": [{"emotion": "disgust", "role": "primary",
+                                          "source": "context"}],
+                            "compound_name": "",
+                            "instruction": {
+                                "identity": {"mask_id": kwargs["mask_id"]},
+                                "emotion": "disgust", "intensity": 0.5,
+                                "source": {"rationale": ""},
+                            },
+                        },
+                        text=text, history=history, user_id=kwargs["user_id"],
+                    )
+
+                async def generate(self, analysis, **_kwargs):
+                    return PipelineResult(
+                        emotion=analysis.emotion, mask_id=analysis.mask_id,
+                        output_path=output, public_path="integration/result.png",
+                        base_intensity=0.5, effective_intensity=0.5, processing_ms=1,
+                    )
+
+            app = websocket_app.create_app(Pipeline(), explainer=explainer)
+            with (
+                patch.object(websocket_app.inference_config, "EMOTION_API_URL", ""),
+                patch.object(websocket_app, "get_user_active_lora", return_value="human"),
+                patch.object(websocket_app, "get_intensity_multiplier", return_value=1.0),
+                TestClient(app) as client,
+            ):
+                missing = client.post("/api/explain", json={"msg_id": "nope"})
+                self.assertEqual(missing.status_code, 404)
+
+                with (
+                    client.websocket_connect("/ws/alice") as alice,
+                    client.websocket_connect("/ws/bob") as bob,
+                ):
+                    def say(sender, text):
+                        sender.send_text(text)
+                        first = alice.receive_json()
+                        alice.receive_json()
+                        bob.receive_json()
+                        bob.receive_json()
+                        return first["msg_id"]
+
+                    say(alice, "你把我的資料庫刪光了")
+                    msg_id = say(bob, "真好啊")
+
+                failed = client.post("/api/explain", json={"msg_id": msg_id}).json()
+                ok = client.post("/api/explain", json={"msg_id": msg_id}).json()
+                cached = client.post("/api/explain", json={"msg_id": msg_id}).json()
+
+        self.assertFalse(failed["cached"])                 # 失敗的說明不快取 → 可重試
+        self.assertEqual(ok["explanation"], "前文說資料庫被刪，這句是反話。")
+        self.assertTrue(cached["cached"])
+        self.assertEqual(cached["explanation"], ok["explanation"])
+        self.assertEqual(len(calls), 2)                    # 第三次走快取，沒再呼叫模型
+        self.assertEqual(calls[0], {
+            "text": "真好啊",
+            "history": [{"role": "alice", "content": "你把我的資料庫刪光了"}],
+            "emotion": "disgust",
+            "speaker": "bob",
+        })
+
     def test_feedback_rejects_unknown_label_and_missing_message(self):
         app = websocket_app.create_app()
         with TestClient(app) as client:

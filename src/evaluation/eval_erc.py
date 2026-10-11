@@ -260,13 +260,76 @@ def load_cped_resplit(split="test", test_ratio=0.2, seed=42, to_traditional=True
     return chosen
 
 
+def load_m3ed(split="train", to_traditional=True, exclude_cped_test=True):
+    """
+    M³ED（Zhao et al., ACL 2022；AIM3-RUC/RUCM3ED）：56 部陸劇、990 段雙人對話、24449 句，
+    7 類情緒與本專案相同，每句 3 人標註（取 final_main_emo）。disgust 佔 6.1%，用來補 CPED
+    的 disgust 不足。標註檔快取於 data/m3ed/annotation.json（官方 repo 根目錄的 annotation.json）。
+
+    ⚠️ M3ED 與 CPED 有同劇（如《小歡喜》《歡樂頌》）。exclude_cped_test=True 時，凡與
+    CPED「按整部劇切」測試集共用 ≥2 個主要角色的 M3ED 劇一律排除，避免測試劇洩漏進訓練。
+    排除清單每次依當前切分重新計算，不寫死劇名。M3ED 只作訓練用，split 參數僅為介面一致。
+    """
+    import json
+    import urllib.request
+    from collections import Counter
+
+    local = PROJECT_ROOT / "data" / "m3ed" / "annotation.json"
+    if not local.exists():
+        local.parent.mkdir(parents=True, exist_ok=True)
+        url = "https://raw.githubusercontent.com/AIM3-RUC/RUCM3ED/main/annotation.json"
+        print(f"[m3ed] 下載 {url} …")
+        req = urllib.request.Request(url, headers={"User-Agent": "vms"})
+        local.write_bytes(urllib.request.urlopen(req, timeout=120).read())
+    data = json.loads(local.read_text(encoding="utf-8"))
+
+    excluded = set()
+    if exclude_cped_test:
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()):   # 角色名以簡體比對，與 M3ED 原文一致
+            test_convs = load_cped_resplit("test", to_traditional=False, by="series")
+        cnt = Counter(u["speaker"] for c in test_convs for u in c if u["speaker"] != "其他")
+        test_major = {s for s, n in cnt.items() if n >= 30}
+        for show, dialogs in data.items():
+            names = {sp["Name"] for d in dialogs.values() for sp in d["SpeakerInfo"].values()}
+            if len(names & test_major) >= 2:
+                excluded.add(show)
+
+    convert = (lambda s: s)
+    if to_traditional:
+        from opencc import OpenCC
+        convert = OpenCC("s2twp").convert
+
+    convs, n_utt = [], 0
+    for show, dialogs in data.items():
+        if show in excluded:
+            continue
+        for dlg in dialogs.values():
+            names = {k: sp["Name"] for k, sp in dlg["SpeakerInfo"].items()}
+            conv = []
+            for u in dlg["Dialog"].values():
+                conv.append({
+                    "speaker": convert(names.get(u["Speaker"], u["Speaker"])),
+                    "text": convert(u["Text"]),
+                    "emotion": normalize_label(u["EmoAnnotation"]["final_main_emo"], "m3ed"),
+                })
+            convs.append(conv)
+            n_utt += len(conv)
+    print(f"[m3ed] {len(data) - len(excluded)}/{len(data)} 部劇、{len(convs)} 段對話、{n_utt} 句"
+          f"（排除與 CPED 測試劇重疊：{sorted(excluded)}）")
+    return convs
+
+
 # --------------------------------------------------------------------------- #
 # 評估
 # --------------------------------------------------------------------------- #
 def run_eval(engine, conversations, limit=None):
     """對每句用其前文當歷史，逐句預測。回傳 (y_true, y_pred, records)。"""
+    import time
     y_true, y_pred, records = [], [], []
     count = 0
+    t0 = time.time()
     for conv in conversations:
         history = []
         for utt in conv:
@@ -283,6 +346,9 @@ def run_eval(engine, conversations, limit=None):
                     "raw_label": res.raw_label_output[:120],
                 })
                 count += 1
+                if count % 1000 == 0:   # 長時間評估的進度回報
+                    el = time.time() - t0
+                    print(f"[eval] {count} 句（{el:.0f}s，{el / count:.2f}s/句）", flush=True)
             history.append({"role": utt.get("speaker", "Speaker"), "content": utt["text"]})
             if limit and count >= limit:
                 break
