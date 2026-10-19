@@ -4,6 +4,9 @@ import json, os, subprocess, time
 from pathlib import Path
 from PIL import Image
 ROOT=Path(__file__).resolve().parents[2]; CONFIG=ROOT/'configs'/'henry_liveportrait_v1.json'; OUT=ROOT/'output'/'current'/'instruction_runs'
+# LivePortrait 的暫存區會放使用者原始照片的複本，必須在不對外提供的 data/ 底下，
+# 不能放在 output/（/output 是不需登入的靜態目錄）；每次用完即刪。
+RUNTIME_ROOT=ROOT/'data'/'liveportrait_runtime'
 def _path(v):
     p=Path(v); return p if p.is_absolute() else ROOT/p
 def generate_from_expression_profile(instruction:dict)->str:
@@ -15,7 +18,15 @@ def generate_from_expression_profile(instruction:dict)->str:
     source = _path(source_override) if source_override else (_path(references[0]) if references else _path(profile['source']))
     template=_path(item['template']); OUT.mkdir(parents=True,exist_ok=True)
     import uuid
-    root=_path(os.getenv('VMS_LIVEPORTRAIT_ROOT','external/LivePortrait')); python=root/'.venv'/'Scripts'/'python.exe'; inference=root/'inference.py'; runtime=OUT/'liveportrait_runtime'/uuid.uuid4().hex; runtime.mkdir(parents=True,exist_ok=True)
+    root=_path(os.getenv('VMS_LIVEPORTRAIT_ROOT','external/LivePortrait')); python=root/'.venv'/'Scripts'/'python.exe'; inference=root/'inference.py'; runtime=RUNTIME_ROOT/uuid.uuid4().hex; runtime.mkdir(parents=True,exist_ok=True)
+    try:
+        return _run_in(runtime, source, template, profile, item, identity, emotion, source_override, references, python, inference, root)
+    finally:
+        import shutil
+        shutil.rmtree(runtime, ignore_errors=True)
+
+
+def _run_in(runtime, source, template, profile, item, identity, emotion, source_override, references, python, inference, root):
     result = None
     if python.is_file() and inference.is_file():
         try:
@@ -38,7 +49,10 @@ def generate_from_expression_profile(instruction:dict)->str:
         raise RuntimeError('此人物的 LivePortrait 生成失敗，已停止，避免誤用 Henry 快取')
     if result is None: result=_path(item['cache'])
     if not result.is_file(): raise RuntimeError('LivePortrait runtime and cache are unavailable')
-    destination=OUT/f'liveportrait_{emotion}_{time.time_ns()}.png'; Image.open(result).convert('RGB').save(destination); return str(destination)
+    destination=OUT/f'liveportrait_{emotion}_{time.time_ns()}.png'
+    with Image.open(result) as rendered:   # 用 with 關檔，暫存區才刪得掉（Windows 會鎖住開著的檔）
+        rendered.convert('RGB').save(destination)
+    return str(destination)
 
 _sd15_img2img = None
 def stylize_with_sd15(image_path: str, emotion: str, strength: float = 0.22, identity=None) -> str:

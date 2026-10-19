@@ -60,6 +60,7 @@ data/train/
 data/processed/
 data/faceid_profiles/
 data/portrait_masks/
+data/liveportrait_runtime/
 data/lora_jobs/
 data/user_lora_training/
 backups/
@@ -76,3 +77,17 @@ resources/*
 # Kohya / TensorBoard training artifacts
 runs/
 wandb/
+# 研究資料集與執行期個資（勿提交；資料集可由 format_meld / build_sarcasm_sft 重生成）
+data/train_dataset_v2/
+data/external/
+data/erc_sft/
+data/cped/
+data/m3ed/
+data/chat_testset/
+# 執行期使用者對話記錄（含個資）
+data/*.db
+*.tfevents.*
+~$*
+*.tmp
+/*.png
+/*.gif

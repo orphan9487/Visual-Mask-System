@@ -91,6 +91,11 @@ def register_user(account: str, username: str, password: str) -> dict:
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            # 情緒糾正紀錄、強度倍率、說話風格都以顯示名稱存取，名稱重複會讓別人的
+            # 糾正寫進你的判讀提示，所以顯示名稱必須唯一。
+            cur.execute("SELECT 1 FROM users WHERE username = %s LIMIT 1", (username,))
+            if cur.fetchone():
+                raise ValueError("顯示名稱已被使用")
             cur.execute(
                 "INSERT INTO users (account, username, password_hash, emotion_prior, face_profile_status) "
                 "VALUES (%s, %s, %s, %s, 'pending')",
@@ -100,6 +105,9 @@ def register_user(account: str, username: str, password: str) -> dict:
         conn.commit()
         return {"id": user_id, "account": account, "username": username,
                 "face_profile_status": "pending", "default_mask_id": None}
+    except ValueError:
+        conn.rollback()
+        raise
     except Exception as exc:
         conn.rollback()
         if "Duplicate" in str(exc) or "duplicate" in str(exc):
