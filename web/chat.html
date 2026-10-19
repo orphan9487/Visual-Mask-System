@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Visual Mask 聊天室</title>
+  <link rel="stylesheet" href="/static/app.css?v=20261002">
+  <link rel="stylesheet" href="/static/chat-theme.css?v=20261017">
+</head>
+<body class="messenger-body">
+  <main class="messenger">
+    <aside class="conversation-sidebar">
+      <a class="messenger-brand" href="/chats"><span class="brand-mark">◉</span><span>VISUAL<br>MASK</span></a>
+      <div class="sidebar-label">最近對話</div>
+      <nav id="recent-rooms" class="recent-rooms"><p class="sidebar-note">載入對話中…</p></nav>
+      <div class="sidebar-footer"><button class="secondary sidebar-logout" onclick="logout()">登出</button></div>
+    </aside>
+    <section class="conversation-panel">
+      <header class="conversation-header">
+        <a class="back-link" href="/chats" aria-label="返回聊天室列表">‹</a>
+        <div class="avatar" id="peer-avatar">?</div>
+        <div class="conversation-title"><strong id="title">聊天室</strong><span id="subtitle">私人 FaceID 情緒對話</span></div>
+        <span class="online-dot" title="已連線"></span>
+      </header>
+      <section id="messages" class="messages" aria-live="polite">
+        <div class="empty-state" id="empty-state"><div class="empty-icon">✦</div><strong>開始一段對話</strong><span>訊息會即時分析情緒，並產生專屬 FaceID 面具。</span></div>
+      </section>
+      <form id="message-form" class="composer">
+        <textarea id="text" rows="1" maxlength="1000" placeholder="輸入訊息…" required></textarea>
+        <button class="send-button" aria-label="發送訊息" title="發送訊息">➤</button>
+      </form>
+    </section>
+  </main>
+  <script src="/static/common.js"></script>
+  <script>
+    (async () => {
+      const me = await requireSession();
+      if (!me) return;
+      const roomId = new URLSearchParams(location.search).get('room_id');
+      if (!roomId) { location.replace('/chats'); return; }
+      const messages = document.getElementById('messages');
+      const emptyState = document.getElementById('empty-state');
+      const form = document.getElementById('message-form');
+      const textInput = document.getElementById('text');
+      const title = document.getElementById('title');
+      const subtitle = document.getElementById('subtitle');
+      const peerAvatar = document.getElementById('peer-avatar');
+      const messageElements = new Map();
+      function feedbackControls(article, message) {
+        if (message.corrected_label) article.dataset.corrected = message.corrected_label;
+        const label = article.querySelector('.emotion-tag');
+        if (label && article.dataset.corrected) label.textContent = `${article.dataset.corrected}（已更正）`;
+        if (message.sender !== me.username || !message.ai_label || article.querySelector('.feedback-controls')) return;
+        const id=message.msg_id||message.id;
+        if (!id) return;
+        const box=document.createElement('div');box.className='feedback-controls';
+        const toggle=document.createElement('button');toggle.type='button';toggle.className='feedback-toggle';toggle.textContent='判斷有誤？';toggle.setAttribute('aria-expanded','false');
+        const form=document.createElement('form');form.hidden=true;
+        const select=document.createElement('select');select.setAttribute('aria-label','正確情緒');
+        for(const [value,text] of Object.entries({neutral:'中性',joy:'開心',sadness:'悲傷',anger:'生氣',surprise:'驚訝',fear:'恐懼',disgust:'厭惡'})){
+          const option=document.createElement('option');option.value=value;option.textContent=text;select.append(option);
+        }
+        select.value=article.dataset.corrected||message.ai_label;
+        const submit=document.createElement('button');submit.type='submit';submit.textContent='送出更正';
+        const note=document.createElement('small');note.setAttribute('role','status');
+        toggle.onclick=()=>{form.hidden=!form.hidden;toggle.setAttribute('aria-expanded',String(!form.hidden))};
+        form.append(select,submit);box.append(toggle,form,note);article.append(box);
+        form.onsubmit=async event=>{
+          event.preventDefault();submit.disabled=true;note.textContent='儲存中…';
+          try{
+            const r=await fetch(`/api/chats/${encodeURIComponent(roomId)}/messages/${encodeURIComponent(id)}/feedback`,{method:'POST',headers:{...authHeaders(),'Content-Type':'application/json'},body:JSON.stringify({correct_label:select.value})});
+            const d=await r.json();if(!r.ok)throw Error(d.detail||'更正失敗');
+            article.dataset.corrected=d.corrected_label;
+            article.querySelector('.emotion-tag').textContent=`${d.corrected_label}（已更正）`;
+            note.textContent='已記錄更正；圖片保留原生成結果。';form.hidden=true;
+          }catch(e){note.textContent=e.message}finally{submit.disabled=false}
+        };
+      }
+
+      function addMessage(message) {
+        function generationStatus(article){
+          let note=article.querySelector('.generation-status');
+          if(!note){note=document.createElement('small');note.className='generation-status';note.setAttribute('role','status');article.append(note)}
+          note.textContent=message.status==='error'?'圖片生成失敗：'+(message.error||'請稍後再試'):(message.status==='generating'?'圖片生成中…':'');
+        }
+        emptyState?.remove();
+        const messageKey = message.msg_id || message.id;
+        if (messageKey && messageElements.has(messageKey)) {
+          const article = messageElements.get(messageKey);
+          generationStatus(article);
+          const existingImage = article.querySelector('img');
+          const existingLabel = article.querySelector('.emotion-tag');
+          if (message.ai_label && existingLabel && !article.dataset.corrected) existingLabel.textContent = message.ai_label;
+          if (message.ai_label && !existingLabel) {
+            const label = document.createElement('span'); label.className = 'emotion-tag'; label.textContent = message.ai_label; article.append(label);
+          }
+          if (message.mask_file && !existingImage) {
+            const image = document.createElement('img'); image.src = `/output/${encodeURIComponent(message.mask_file)}`; image.alt = '依情緒生成的 FaceID 面具'; image.loading = 'lazy'; article.append(image);
+          }
+          messages.scrollTop = messages.scrollHeight;
+          feedbackControls(article,message);
+          return;
+        }
+        const article = document.createElement('article');
+        const mine = message.sender === me.username;
+        article.className = `message ${mine ? 'mine' : ''}`;
+        const sender = document.createElement('span');
+        sender.className = 'message-sender';
+        sender.textContent = mine ? '你' : (message.sender || '系統');
+        const body = document.createElement('div');
+        body.className = 'message-text';
+        body.textContent = message.text || '';
+        article.append(sender, body);
+        if (message.ai_label) {
+          const label = document.createElement('span');
+          label.className = 'emotion-tag';
+          label.textContent = message.ai_label;
+          article.append(label);
+        }
+        if (message.mask_file) {
+          const image = document.createElement('img');
+          image.src = `/output/${encodeURIComponent(message.mask_file)}`;
+          image.alt = '依情緒生成的 FaceID 面具';
+          image.loading = 'lazy';
+          article.append(image);
+        }
+        messages.append(article);
+        generationStatus(article);
+        feedbackControls(article,message);
+        if (messageKey) messageElements.set(messageKey, article);
+        messages.scrollTop = messages.scrollHeight;
+      }
+
+      async function loadSidebar() {
+        const response = await fetch('/api/chats', {headers:authHeaders()});
+        const data = await response.json();
+        const rooms = data.rooms || [];
+        const current = rooms.find(item => item.id === roomId);
+        if (current) {
+          title.textContent = current.peer_name;
+          subtitle.textContent = '私人 FaceID 情緒對話';
+          peerAvatar.textContent = current.peer_name.slice(0, 1).toUpperCase();
+        }
+        const nav = document.getElementById('recent-rooms');
+        nav.replaceChildren();
+        if (!rooms.length) { nav.textContent = '尚無其他對話'; return; }
+        rooms.forEach(item => {
+          const link = document.createElement('a');
+          link.className = `recent-room ${item.id === roomId ? 'active' : ''}`;
+          link.href = `/chat?room_id=${encodeURIComponent(item.id)}`;
+          const icon = document.createElement('span');
+          icon.className = 'mini-avatar';
+          icon.textContent = item.peer_name.slice(0, 1).toUpperCase();
+          const name = document.createElement('span');
+          name.textContent = item.peer_name;
+          link.append(icon, name);
+          nav.append(link);
+        });
+      }
+
+      await loadSidebar();
+      const historyResponse = await fetch(`/api/chats/${encodeURIComponent(roomId)}/messages`, {headers:authHeaders()});
+      if (historyResponse.ok) {
+        const history = await historyResponse.json();
+        (history.messages || []).forEach(addMessage);
+      }
+      const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+      const socket = new WebSocket(`${scheme}://${location.host}/ws/${encodeURIComponent(roomId)}?token=${encodeURIComponent(token())}`);
+      socket.onmessage = event => addMessage(JSON.parse(event.data));
+      socket.onclose = () => addMessage({sender:'系統', text:'連線已中斷，請重新整理頁面後再試。'});
+      form.onsubmit = event => {
+        event.preventDefault();
+        const value = textInput.value.trim();
+        if (!value || socket.readyState !== WebSocket.OPEN) return;
+        socket.send(JSON.stringify({type:'message', text:value}));
+        textInput.value = '';
+        textInput.style.height = '';
+      };
+      textInput.oninput = () => { textInput.style.height = 'auto'; textInput.style.height = `${Math.min(textInput.scrollHeight, 128)}px`; };
+    })();
+  </script>
+</body>
+</html>

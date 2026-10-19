@@ -71,3 +71,4 @@ def resolve_emotions(fusion: dict, threshold: float = PRESENCE_THRESHOLD) -> dic
         "emotions": [{"emotion": primary, "role": "primary", "source": fusion.get("source", "text")}],
         "compound_name": None,
     }
+

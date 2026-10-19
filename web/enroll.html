@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>建立 FaceID Profile</title>
+  <link rel="stylesheet" href="/static/app.css?v=20261002">
+<link rel="stylesheet" href="/static/pages-theme.css?v=20261017"></head>
+<body class="setup-body">
+  <main class="shell"><section class="card">
+    <div class="brand">◉ FACEID SETUP</div>
+    <h1>建立你的專屬面具</h1>
+    <p class="hint">上傳一張清晰正臉照。選取框內是會保留的範圍；外側會以半透明遮罩標示。可拖曳四個角或邊線調整範圍。</p>
+    <input id="file" type="file" accept="image/jpeg,image/png,image/webp">
+    <div class="crop-wrap"><canvas id="canvas" width="800" height="800"></canvas></div>
+    <p class="hint">裁切後會以 FaceID 建立預設面具；不會訓練 LoRA。</p>
+    <p class="error" id="error"></p>
+    <div class="row"><button class="secondary" onclick="logout()">登出</button><button id="submit" disabled>確認並建立面具</button></div>
+  </section></main>
+  <script src="/static/common.js"></script>
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const fileInput = document.getElementById('file');
+    const submitButton = document.getElementById('submit');
+    const errorElement = document.getElementById('error');
+    const SIZE = 800, MIN_CROP = 100, HANDLE_RADIUS = 18;
+    let img, imageRect, crop, drag;
+
+    requireSession({ready:false}).then(me => { if (me?.face_profile_status === 'ready') location.replace('/chats'); });
+    function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+    function cropRight() { return crop.x + crop.width; }
+    function cropBottom() { return crop.y + crop.height; }
+    function drawHandle(x, y) {
+      ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2);
+      ctx.fillStyle = '#96E5B3'; ctx.fill(); ctx.strokeStyle = '#9C4C17'; ctx.lineWidth = 3; ctx.stroke();
+    }
+    function draw() {
+      ctx.fillStyle = '#fff3e3'; ctx.fillRect(0, 0, SIZE, SIZE);
+      if (!img) return;
+      ctx.drawImage(img, imageRect.x, imageRect.y, imageRect.width, imageRect.height);
+      // The even-odd path leaves the selected area clear and dims only its outside.
+      ctx.beginPath(); ctx.rect(0, 0, SIZE, SIZE); ctx.rect(crop.x, crop.y, crop.width, crop.height);
+      ctx.fillStyle = 'rgba(63, 36, 20, .50)'; ctx.fill('evenodd');
+      ctx.strokeStyle = '#96E5B3'; ctx.lineWidth = 5; ctx.strokeRect(crop.x, crop.y, crop.width, crop.height);
+      const right = cropRight(), bottom = cropBottom();
+      [[crop.x,crop.y], [right,crop.y], [right,bottom], [crop.x,bottom], [(crop.x+right)/2,crop.y], [right,(crop.y+bottom)/2], [(crop.x+right)/2,bottom], [crop.x,(crop.y+bottom)/2]].forEach(([x,y]) => drawHandle(x,y));
+    }
+    function point(event) {
+      const rect = canvas.getBoundingClientRect();
+      return {x:(event.clientX - rect.left) * SIZE / rect.width, y:(event.clientY - rect.top) * SIZE / rect.height};
+    }
+    function hitHandle(p) {
+      const right = cropRight(), bottom = cropBottom();
+      const handles = {nw:[crop.x,crop.y], n:[(crop.x+right)/2,crop.y], ne:[right,crop.y], e:[right,(crop.y+bottom)/2], se:[right,bottom], s:[(crop.x+right)/2,bottom], sw:[crop.x,bottom], w:[crop.x,(crop.y+bottom)/2]};
+      return Object.entries(handles).find(([,h]) => Math.hypot(p.x-h[0], p.y-h[1]) <= HANDLE_RADIUS)?.[0];
+    }
+    function resizeCrop(mode, p) {
+      const original = drag.crop;
+      let left = original.x, top = original.y, right = original.x + original.width, bottom = original.y + original.height;
+      if (mode.includes('w')) left = clamp(p.x, imageRect.x, right - MIN_CROP);
+      if (mode.includes('e')) right = clamp(p.x, left + MIN_CROP, imageRect.x + imageRect.width);
+      if (mode.includes('n')) top = clamp(p.y, imageRect.y, bottom - MIN_CROP);
+      if (mode.includes('s')) bottom = clamp(p.y, top + MIN_CROP, imageRect.y + imageRect.height);
+      crop = {x:left, y:top, width:right-left, height:bottom-top};
+    }
+    fileInput.onchange = () => {
+      const selected = fileInput.files[0]; if (!selected) return;
+      img = new Image();
+      img.onload = () => {
+        const scale = Math.min(SIZE / img.width, SIZE / img.height);
+        imageRect = {width:img.width * scale, height:img.height * scale};
+        imageRect.x = (SIZE - imageRect.width) / 2; imageRect.y = (SIZE - imageRect.height) / 2;
+        const side = Math.min(imageRect.width, imageRect.height) * .72;
+        crop = {x:imageRect.x + (imageRect.width-side)/2, y:imageRect.y + (imageRect.height-side)/2, width:side, height:side};
+        draw(); submitButton.disabled = false;
+      };
+      img.src = URL.createObjectURL(selected);
+    };
+    canvas.onpointerdown = event => {
+      if (!img) return;
+      const mode = hitHandle(point(event)); if (!mode) return;
+      drag = {mode, crop:{...crop}}; canvas.setPointerCapture(event.pointerId);
+    };
+    canvas.onpointermove = event => { if (!drag) return; resizeCrop(drag.mode, point(event)); draw(); };
+    canvas.onpointerup = () => { drag = null; };
+    canvas.onpointercancel = () => { drag = null; };
+    submitButton.onclick = async () => {
+      if (crop.width < MIN_CROP || crop.height < MIN_CROP) { errorElement.textContent = '請保留較大的臉部裁切範圍'; return; }
+      // Convert displayed canvas coordinates back to original-image pixels.
+      const sourceCrop = {x:Math.round((crop.x-imageRect.x)*img.width/imageRect.width), y:Math.round((crop.y-imageRect.y)*img.height/imageRect.height), width:Math.round(crop.width*img.width/imageRect.width), height:Math.round(crop.height*img.height/imageRect.height)};
+      const data = new FormData(); data.append('image', fileInput.files[0]); data.append('crop_json', JSON.stringify(sourceCrop));
+      submitButton.disabled = true; errorElement.textContent = '正在驗證臉部並建立 FaceID profile…';
+      const response = await fetch('/api/face-profile', {method:'POST', headers:authHeaders(), body:data});
+      const result = await response.json();
+      if (!response.ok) { errorElement.textContent = result.detail || '建立失敗'; submitButton.disabled = false; return; }
+      location.replace('/chats');
+    };
+  </script>
+</body>
+</html>

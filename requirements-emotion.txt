@@ -18,3 +18,4 @@ fastapi
 uvicorn[standard]
 python-dotenv
 emoji
+

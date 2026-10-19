@@ -162,6 +162,50 @@ class IdentityDB:
         """
         if mask_id and mask_id in self.masks:
             return self.masks[mask_id]
+        if mask_id and mask_id.startswith('portrait_'):
+            from src.services.portrait_masks import read
+            portrait=read(mask_id)
+            if portrait['status']!='ready' or (user_id and portrait['username']!=user_id):
+                raise ValueError('此面具尚未確認或不屬於目前使用者')
+            return MaskIdentity(mask_id=mask_id,trigger='person',base_prompt='natural portrait',
+                lora_path='',display_name=portrait['name'],identity_mode='faceid',
+                faceid_reference_paths=[portrait['base']])
+        if mask_id and mask_id.startswith('lora_'):
+            from src.services.lora_training import JOBS
+            job_path = JOBS / (mask_id[5:] + '.json')
+            if job_path.is_file():
+                job = json.loads(job_path.read_text(encoding='utf-8'))
+                if job['status'] == 'ready':
+                    from src.services.mask_generation_settings import settings, checkpoint_path
+                    config = settings(job)
+                    return MaskIdentity(mask_id=mask_id, trigger=job['trigger'],
+                        base_prompt='person, realistic photo', lora_path=checkpoint_path(job,config['checkpoint']),
+                        display_name=job['mask_name'], lora_weight=config['lora_weight'])
+        # Enrolled users are stored in MySQL rather than this source-controlled
+        # JSON registry.  Load their single cropped reference at runtime.
+        if mask_id and mask_id.startswith("faceid_user_"):
+            try:
+                from db.profile_repo import get_face_profile
+                profile = get_face_profile(mask_id)
+                if profile:
+                    base_prompt = "natural skin"
+                    try:
+                        from db.appearance_repo import prompt_fragment
+                        hints = prompt_fragment(profile["user_id"])
+                        if hints:
+                            base_prompt = f"{hints}, {base_prompt}"
+                    except Exception:
+                        pass
+                    return MaskIdentity(
+                        mask_id=profile["mask_id"], trigger="faceidportrait",
+                        base_prompt=base_prompt,
+                        lora_path="", display_name=profile["username"],
+                        identity_mode="faceid",
+                        faceid_reference_paths=[profile["reference_path"]],
+                        faceid_scale=0.55,
+                    )
+            except Exception:
+                pass
         if user_id and user_id in self.bindings:
             return self.masks[self.bindings[user_id]]
         return self.masks[DEFAULT_MASK_ID]

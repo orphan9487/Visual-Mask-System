@@ -40,39 +40,38 @@ SCHEMA_VERSION = "1.1"   # 1.1：新增選用欄位 intent（語意意圖分析�
 # 每種情緒的：英文表情描述、喚醒度(intensity, 0-1)。
 # 喚醒度同時決定表情強度與 modality（高喚醒→動態影片，低喚醒→靜態貼圖）。
 EMOTION_PROFILE = {
-    "anger":    ("angry expression, furrowed brows, clenched jaw, intense glare, frowning", 0.90),
-    "joy":      ("happy bright smile, sparkling eyes, cheerful expression", 0.80),
-    "surprise": ("surprised expression, wide eyes, raised eyebrows, slightly open mouth", 0.80),
-    "fear":     ("fearful expression, tense face, wide worried eyes", 0.75),
-    "disgust":  ("disgusted expression, wrinkled nose, curled upper lip", 0.60),
-    "sadness":  ("sad expression, downcast teary eyes, drooping mouth, sorrowful", 0.60),
+    "anger":    ("angry, furrowed brows, sharp eyes, pressed lips, clenched jaw", 0.90),
+    "joy":      ("broad smile, visible teeth, raised cheeks, bright eyes", 0.80),
+    "surprise": ("surprised, raised brows, wide eyes, open mouth", 0.80),
+    "fear":     ("fearful, tense raised brows, worried wide eyes, open mouth", 0.75),
+    "disgust":  ("disgusted, wrinkled nose, raised upper lip, narrowed eyes", 0.60),
+    "sadness":  ("sad, raised inner brows, downturned mouth, watery eyes", 0.60),
     "neutral":  ("calm relaxed neutral expression", 0.30),
 }
 
-DEFAULT_NEGATIVE = ("blurry eyes, deformed iris, hazy, low quality, "
-                    "oil painting, cross-eyed, extra fingers, deformed, "
-                    "cropped head, cropped face, extreme close-up, close-up, "
-                    "face close-up, zoomed in, cut off hair, hands, fingers, "
-                    "black and white, monochrome, grayscale, desaturated, "
-                    "sepia, muted colors")
+EMOTION_NEGATIVE = {
+    "anger": "smile, cheerful, relaxed brows",
+    "sadness": "smile, cheerful, laughing, raised cheeks",
+    "fear": "smile, cheerful, relaxed face",
+    "disgust": "smile, cheerful, laughing",
+    "surprise": "closed eyes, relaxed brows, neutral mouth",
+}
 
-COLOR_PHOTO_STYLE = ("full-color color photograph, natural skin tones, "
-                     "natural color saturation, realistic indoor lighting")
+DEFAULT_NEGATIVE = ("blurry, deformed, cross-eyed, cropped face, cropped hair, "
+                    "extreme close-up, black and white, anime, painting")
+
+COLOR_PHOTO_STYLE = "realistic photo, natural skin"
 
 HENRY_NEGATIVE = ("bald, receding hairline, gray hair, white hair, "
                   "elderly, old man")
 
 FACEID_NEGATIVE = (
-    "round wide face, oversized eyes, wide-set eyes, protruding nose, side view, "
-    "tilted head, multiple faces, deformed, cross-eyed, blurry, low quality, "
-    "painting, anime, monochrome, grayscale, sepia, cropped head, cropped face, "
-    "extreme close-up, close-up, face close-up, zoomed in, cut off hair"
+    "round wide face, oversized eyes, side view, tilted head, multiple faces, "
+    "deformed, cross-eyed, blurry, cropped face, cropped hair, extreme close-up, "
+    "anime, painting, black and white"
 )
 
-FACEID_COMPOSITION = (
-    "centered head-and-shoulders portrait, full head visible, "
-    "space above hair"
-)
+FACEID_COMPOSITION = "centered face portrait, full face visible, no shoulders"
 
 # Modality Selector 門檻：喚醒度 ≥ 此值 → 動態影片；否則靜態貼圖。
 INTENSITY_VIDEO_THRESHOLD = 0.6
@@ -130,7 +129,7 @@ class VisualInstructionGenerator:
                 f"{motion}, vivid lighting, masterpiece, high quality, highly detailed.")
 
     def _positive_prompt(self, mask: MaskIdentity, expression: str) -> str:
-        # 沿用專案既有生成慣例：身分在前、情緒以權重強化(:1.3)壓過身分中性傾向
+        # 身分在前；提高情緒權重，避免 FaceID 的中性參考臉壓過表情。
         identity_prefix = (
             mask.base_prompt
             if mask.identity_mode == "faceid"
@@ -142,8 +141,7 @@ class VisualInstructionGenerator:
             else ""
         )
         return (f"{identity_prefix}, "
-                f"({expression}:1.3){composition}, vivid lighting, masterpiece, "
-                f"high quality, highly detailed, {COLOR_PHOTO_STYLE}")
+                f"({expression}:1.6){composition}, {COLOR_PHOTO_STYLE}")
 
     def generate(self, emotion: str, *, user_id: Optional[str] = None,
                  mask_id: Optional[str] = None, intensity: Optional[float] = None,
@@ -176,6 +174,9 @@ class VisualInstructionGenerator:
         negative_prompt = (
             FACEID_NEGATIVE if mask.identity_mode == "faceid" else DEFAULT_NEGATIVE
         )
+        emotion_negative = EMOTION_NEGATIVE.get(emotion)
+        if emotion_negative:
+            negative_prompt = f"{negative_prompt}, {emotion_negative}"
         if mask.mask_id == "henry" and mask.identity_mode != "faceid":
             negative_prompt = f"{negative_prompt}, {HENRY_NEGATIVE}"
 

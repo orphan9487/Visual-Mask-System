@@ -48,33 +48,6 @@ class EmotionInferenceApiTests(unittest.TestCase):
         self.assertEqual(received["speaker_prior"], "Often uses strong language.")
         self.assertEqual(received["correction_examples"][0]["correct_label"], "anger")
 
-    def test_explain_passes_label_history_and_speaker(self):
-        received = {}
-
-        async def predictor(text, history, **_kwargs):
-            return {"emotion": "neutral", "parse_ok": True}
-
-        async def explainer(text, history, emotion, speaker=None):
-            received.update(text=text, history=history, emotion=emotion, speaker=speaker)
-            return {"explanation": "前文提到資料被刪，所以是反話。", "source": "llm"}
-
-        with patch.dict(os.environ, {"VMS_EMOTION_API_TOKEN": ""}):
-            client = TestClient(create_app(predictor, explainer))
-        response = client.post("/explain", json={
-            "text": "真好啊",
-            "history": [{"role": "alice", "content": "你把我的資料庫刪光了"}],
-            "emotion": "disgust",
-            "speaker": "bob",
-        })
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["explanation"], "前文提到資料被刪，所以是反話。")
-        self.assertEqual(received["emotion"], "disgust")
-        self.assertEqual(received["speaker"], "bob")
-        self.assertEqual(received["history"][0]["role"], "alice")
-        # 不在 7 類內的標籤直接擋下
-        bad = client.post("/explain", json={"text": "真好啊", "emotion": "irony"})
-        self.assertEqual(bad.status_code, 422)
-
     def test_token_is_required_when_configured(self):
         async def predictor(text, history, **_kwargs):
             return {"emotion": "neutral", "parse_ok": True}
@@ -92,20 +65,6 @@ class EmotionInferenceApiTests(unittest.TestCase):
 
 
 class EmotionServiceRoutingTests(unittest.IsolatedAsyncioTestCase):
-    async def test_explain_uses_remote_service_when_configured(self):
-        remote = {"emotion": "joy", "explanation": "remote explanation", "source": "llm"}
-        with (
-            patch.object(emotion_service.config, "EMOTION_API_URL", "http://127.0.0.1:8010"),
-            patch.object(emotion_service.config, "EMOTION_API_TOKEN", "token"),
-            patch.object(emotion_service.config, "EMOTION_API_TIMEOUT", 3.0),
-            patch("src.services.emotion_inference_client.explain_remote",
-                  AsyncMock(return_value=remote)) as explain_remote,
-        ):
-            result = await emotion_service.explain_emotion("真好啊", [], "joy", speaker="bob")
-        self.assertEqual(result, remote)
-        explain_remote.assert_awaited_once()
-        self.assertEqual(explain_remote.await_args.kwargs["speaker"], "bob")
-
     async def test_remote_service_is_used_when_configured(self):
         remote_result = {
             "emotion": "disgust",

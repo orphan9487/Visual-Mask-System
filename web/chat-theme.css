@@ -1,0 +1,40 @@
+/* Cream forest — scoped to the two chat pages. */
+body.chat-list-body,body.messenger-body{color-scheme:light;--bg:#FEDDB8;--panel:#fff9f0;--line:#ddc3ac;--ink:#71390f;--muted:#77554e;--accent:#96E5B3;--danger:#a72e30;color:var(--ink);background:#fff0dc;font-family:system-ui,'Microsoft JhengHei',sans-serif}
+button,a,input,textarea,select{transition:background-color .18s,box-shadow .18s}
+body.chat-list-body{background:radial-gradient(ellipse at 12% 8%,#96E5B355,transparent 40%),radial-gradient(ellipse at 90% 90%,#B9D29155,transparent 42%),#fff0dc}
+.chat-list-body .topbar{max-width:1100px;margin:auto;padding:22px 28px;border-bottom:1px solid #9C4C1720;gap:16px;flex-wrap:wrap}
+.chat-list-body .brand{color:#9C4C17;letter-spacing:.09em}.chat-list-body #who{margin-left:auto;font-weight:700}
+.chat-list-body .shell{width:min(100%,900px);padding-top:34px}
+.chat-list-body .card{background:#fffaf2;border:1px solid #e7ccb0;border-radius:28px;padding:32px;box-shadow:0 14px 42px #9C4C1710}
+.chat-list-body h1{font-size:1.9rem;letter-spacing:-.04em}.chat-list-body h3{margin-top:30px;color:#9C4C17}
+.chat-list-body label{padding:18px;background:#B9D29140;border:1px solid #B9D291;border-radius:18px;font-weight:700}
+.chat-list-body select{display:block;width:100%;margin-top:10px;padding:12px 14px;background:#fffdf7;color:#71390f;border:1px solid #c5ad91;border-radius:12px;font:inherit}
+.chat-list-body .item{background:#fff3e2;border:1px solid #ead2b8;color:#71390f;border-radius:18px;padding:18px 20px;box-shadow:0 3px 0 #9C4C1708}
+.chat-list-body .item:hover{background:#B9D29155;border-color:#a6bf7e}.chat-list-body .item small{color:#77554e;line-height:1.6}
+.chat-list-body button.secondary,.messenger-body button.secondary{background:#FEDDB8;color:#71390f;border:1px solid #c99669;border-radius:14px}
+.chat-list-body button.secondary:hover,.messenger-body button.secondary:hover{background:#f9d0a2}
+.messenger{background:#fff9f0;border-inline:1px solid #dfc6ae;height:100dvh}
+.conversation-sidebar{background:#FEDDB8;border-color:#d8b99b;padding:26px 14px 16px}
+.messenger-brand{color:#9C4C17;letter-spacing:.06em;padding-bottom:34px}.brand-mark{background:#96E5B3;color:#71390f;border-radius:12px;box-shadow:0 3px 0 #9C4C1712}
+.sidebar-label,.sidebar-note{color:#77554e}.sidebar-label{border-left:3px solid #956D64;margin-bottom:8px}.recent-room{color:#71390f;border-radius:15px;padding:12px}
+.recent-room:hover{background:#fff0db}.recent-room.active{background:#B9D291;color:#593b19;box-shadow:0 3px 8px #9C4C1710}
+.mini-avatar,.avatar{background:#96E5B3;color:#71390f;border:2px solid #fff9f0}
+.conversation-panel{background:radial-gradient(circle at 85% 10%,#B9D29120,transparent 45%),#fff3e3}
+.conversation-header{background:#fffaf3;border-bottom:1px solid #e4cdb6;min-height:80px;color:#71390f}
+.conversation-title span{color:#77554e}.back-link{color:#9C4C17}.online-dot{background:#58a86d;box-shadow:0 0 0 4px #96E5B350}
+.messages{gap:17px;scrollbar-color:#c8ae91 transparent}
+.message{position:relative;min-width:0;background:#fff9f0;color:#71390f;border:1px solid #956D6480;border-radius:8px 22px 22px 22px;padding:13px 16px;box-shadow:0 4px 12px #9C4C1709}
+.message.mine{background:#fff9f0;border-color:#956D6480;border-radius:22px 8px 22px 22px;box-shadow:0 4px 12px #9C4C1709}
+.message.mine .message-sender{min-height:20px;padding-right:100px}
+.message-sender{color:#71390f}.message-text{line-height:1.65}.emotion-tag{background:#B9D291;color:#493b23;padding:4px 10px;font-weight:700}
+.message img{width:512px;max-width:100%;height:auto;object-fit:contain;border-radius:12px;border-color:#9C4C171a}
+.empty-state{color:#77554e}.empty-state strong{color:#9C4C17}.empty-icon{background:#B9D291;color:#71390f;border-radius:22px}
+.composer{background:linear-gradient(transparent,#fff3e3 30%)}
+.composer textarea{background:#fffdf8;color:#71390f;border:1px solid #ceb49a;border-radius:20px;box-shadow:0 5px 18px #9C4C1709}
+.composer textarea::placeholder{color:#77554e}.composer textarea:focus{outline:3px solid #96E5B370;border-color:#6e9e7b}
+.send-button{background:#96E5B3;color:#71390f;border:1px solid #79c38e;border-radius:18px;box-shadow:0 4px 0 #74b88b}
+.send-button:hover{background:#B9D291;filter:none}
+button:focus-visible,a:focus-visible,select:focus-visible{outline:3px solid #9C4C17;outline-offset:3px}
+@media(max-width:720px){.chat-list-body .topbar{padding:16px;gap:10px}.chat-list-body .card{padding:22px;border-radius:22px}.chat-list-body .shell{padding:24px 14px}.conversation-header{min-height:70px}.messages{padding:20px 14px}.message{max-width:92%}}
+@media(prefers-reduced-motion:reduce){button,a,input,textarea,select{transition:none}}
+.feedback-controls{font-size:.8rem}.feedback-controls button{background:#fff9f0;color:#71390f;border:1px solid #956D6480;padding:6px 10px;border-radius:10px;font-size:inherit}.feedback-controls .feedback-toggle{position:absolute;top:9px;right:12px;background:transparent;border:0;box-shadow:none;color:#77554e;font-size:.7rem;font-weight:400;padding:4px 6px}.feedback-controls .feedback-toggle:hover{background:#FEDDB850;color:#9C4C17}.feedback-controls form:not([hidden]){display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.feedback-controls select{background:#fffaf2;color:#71390f;border:1px solid #956D64;border-radius:8px;padding:6px}.feedback-controls small{display:block;margin-top:6px;max-width:320px;color:#71390f}.feedback-controls small:empty{display:none}

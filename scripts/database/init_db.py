@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import sys
 from pathlib import Path
 
@@ -13,10 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config.database import database_settings
-
-
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+from db.user_repo import hash_password
 
 
 def initialize_database() -> None:
@@ -46,10 +42,24 @@ def initialize_database() -> None:
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     account VARCHAR(50) UNIQUE NOT NULL,
                     username VARCHAR(50) NOT NULL,
-                    password_hash VARCHAR(64) NOT NULL,
-                    emotion_prior TEXT NOT NULL
+                    password_hash VARCHAR(255) NOT NULL,
+                    emotion_prior TEXT NOT NULL,
+                    face_profile_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                    default_mask_id VARCHAR(100) NULL,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
+            # Safe migrations for databases created by older project versions.
+            for statement in [
+                "ALTER TABLE users MODIFY password_hash VARCHAR(255) NOT NULL",
+                "ALTER TABLE users ADD COLUMN face_profile_status VARCHAR(20) NOT NULL DEFAULT 'pending'",
+                "ALTER TABLE users ADD COLUMN default_mask_id VARCHAR(100) NULL",
+                "ALTER TABLE users ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+            ]:
+                try:
+                    cursor.execute(statement)
+                except pymysql.MySQLError:
+                    pass
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS user_loras (
                     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -58,6 +68,59 @@ def initialize_database() -> None:
                     display_name VARCHAR(100) NOT NULL,
                     is_active TINYINT(1) NOT NULL DEFAULT 0,
                     UNIQUE KEY unique_user_lora (username, lora_key)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS face_profiles (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT NOT NULL UNIQUE,
+                    mask_id VARCHAR(100) NOT NULL UNIQUE,
+                    reference_path TEXT NOT NULL,
+                    crop_json TEXT NOT NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'ready',
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_fp_mask (mask_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_appearance_profiles (
+                    user_id INT PRIMARY KEY,
+                    gender_presentation VARCHAR(20) NOT NULL DEFAULT 'unspecified',
+                    age_group VARCHAR(20) NOT NULL DEFAULT 'adult',
+                    hair_length VARCHAR(20) NOT NULL DEFAULT 'unspecified',
+                    hair_color VARCHAR(20) NOT NULL DEFAULT 'unspecified',
+                    hair_style VARCHAR(20) NOT NULL DEFAULT 'unspecified',
+                    glasses TINYINT(1) NOT NULL DEFAULT 0,
+                    facial_hair VARCHAR(20) NOT NULL DEFAULT 'unspecified',
+                    framing VARCHAR(30) NOT NULL DEFAULT 'face_only',
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS chat_rooms (
+                    id CHAR(32) PRIMARY KEY,
+                    kind VARCHAR(20) NOT NULL DEFAULT 'direct',
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS chat_room_members (
+                    room_id CHAR(32) NOT NULL,
+                    user_id INT NOT NULL,
+                    PRIMARY KEY (room_id, user_id),
+                    INDEX idx_crm_user (user_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id CHAR(32) PRIMARY KEY,
+                    room_id CHAR(32) NOT NULL,
+                    sender_id INT NOT NULL,
+                    text TEXT NOT NULL,
+                    emotion VARCHAR(50) NULL,
+                    mask_file TEXT NULL,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_cm_room_time (room_id, created_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
             cursor.execute("""
@@ -72,6 +135,22 @@ def initialize_database() -> None:
                     INDEX idx_td_time (correction_time)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_training_photos (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    mask_name VARCHAR(100) NOT NULL DEFAULT '未命名面具',
+                    path TEXT NOT NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'uploaded',
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_utp_user (user_id),
+                    INDEX idx_utp_status (status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            try:
+                cursor.execute("ALTER TABLE user_training_photos ADD COLUMN mask_name VARCHAR(100) NOT NULL DEFAULT '未命名面具'")
+            except pymysql.MySQLError:
+                pass
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS intensity_adjustments (
                     id INT AUTO_INCREMENT PRIMARY KEY,

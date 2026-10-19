@@ -1,0 +1,16 @@
+# Main photo-mask web app. LivePortrait and Breeze2 use separate environments.
+fastapi==0.136.1
+uvicorn[standard]>=0.29.0
+pymysql>=1.1.0
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+python-multipart>=0.0.9
+emoji>=2.0.0
+Pillow
+numpy<2.0
+opencv-python>=4.10.0,<5.0.0
+insightface==0.7.3
+onnxruntime>=1.20.0,<2.0.0
+
+# Only for development tests; not needed by the running website.
+httpx>=0.27.0

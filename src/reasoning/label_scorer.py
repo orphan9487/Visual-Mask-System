@@ -20,8 +20,15 @@ class LabelScorer:
         model = bk.model
         base = model.base_model.model if hasattr(model, "base_model") else model
         self.lm = base.language_model          # 套了 LoRA 的內層 LlamaForCausalLM
-        from src.training.train_erc_breeze2_lora import _swap_to_sdpa
-        _swap_to_sdpa(self.lm)
+        # Keep inference independent of training-script dependencies.
+        try:
+            from transformers.models.llama.modeling_llama import LlamaSdpaAttention
+        except ImportError:
+            LlamaSdpaAttention = None
+        if LlamaSdpaAttention is not None:
+            self.lm.config._attn_implementation = 'sdpa'
+            for layer in self.lm.model.layers:
+                layer.self_attn.__class__ = LlamaSdpaAttention
         self.device = next(self.lm.parameters()).device
         self.pad_id = self.tok.pad_token_id if self.tok.pad_token_id is not None else self.tok.eos_token_id
 

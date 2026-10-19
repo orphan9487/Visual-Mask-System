@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -95,10 +96,12 @@ class PipelineService:
     ) -> None:
         self._analyzer = analyzer or _default_analyzer
         self._generator = generator or _default_generator
+        self._custom_generator = generator is not None
         self.output_root = Path(output_root).resolve()
         self.output_root.mkdir(parents=True, exist_ok=True)
-        # Renderers swap LoRA adapters on shared pipelines; serialize GPU work.
+        # Serialize GPU expression work.
         self._generation_lock = asyncio.Lock()
+        self.image_backend = 'liveportrait'
 
     async def analyze(
         self,
@@ -115,7 +118,6 @@ class PipelineService:
         safe_history = [
             {"role": str(item.get("role", "user")),
              "content": str(item.get("content", ""))[:1000]}
-            # 只保留最近 N 句（N＝語境視窗設定），與 ERC 實際使用的語境一致
             for item in (history[-inference_config.ERC_HISTORY_TURNS:]
                          if inference_config.ERC_HISTORY_TURNS else [])
             if isinstance(item, dict) and item.get("content")
@@ -138,25 +140,40 @@ class PipelineService:
         intensity_multiplier: float = 1.0,
     ) -> PipelineResult:
         instruction = copy.deepcopy(analysis.instruction)
+        identity = instruction.setdefault('identity', {})
+        confirmed_neutral = None
+        if str(identity.get('mask_id','')).startswith('portrait_'):
+            from src.services.portrait_masks import read
+            mask=read(identity['mask_id'])
+            if mask['status']!='ready' or (analysis.user_id and mask['username']!=analysis.user_id):
+                raise ValueError('無法使用此面具')
+            identity.update(source_override=mask['base'])
+            if analysis.emotion=='neutral':confirmed_neutral=mask['base']
         base_intensity = analysis.base_intensity
         multiplier = max(0.5, min(1.5, float(intensity_multiplier)))
         effective_intensity = round(max(0.0, min(1.0, base_intensity * multiplier)), 4)
         instruction["intensity"] = effective_intensity
 
         # Keep modality and renderer hints consistent with the adjusted value.
-        identity_mode = str(instruction.get("identity", {}).get("mode", "lora"))
-        modality = (
-            "sticker"
-            if identity_mode == "faceid"
-            else ("video" if effective_intensity >= 0.6 else "sticker")
-        )
-        instruction["modality"] = modality
-        hints = instruction.setdefault("generation_hints", {})
-        hints["num_frames"] = 16 if modality == "video" else 1
+        instruction['modality']='sticker'
+        hints=instruction.setdefault('generation_hints',{})
+        hints['num_frames']=1
 
         started = time.perf_counter()
         async with self._generation_lock:
-            generated = await asyncio.to_thread(self._generator, instruction)
+            if confirmed_neutral:
+                # Preserve the user-approved neutral result exactly; do not let
+                # another expression transfer or diffusion pass add a smile.
+                import shutil, uuid
+                destination=self.output_root/'instruction_runs'/f'neutral_confirmed_{uuid.uuid4().hex}.png'
+                destination.parent.mkdir(parents=True,exist_ok=True)
+                shutil.copyfile(confirmed_neutral,destination)
+                generated=str(destination)
+            elif not self._custom_generator:
+                from src.integrations.liveportrait_expression import generate_from_expression_profile
+                generated = await asyncio.to_thread(generate_from_expression_profile, instruction)
+            else:
+                generated = await asyncio.to_thread(self._generator, instruction)
         processing_ms = round((time.perf_counter() - started) * 1000)
 
         output_path = Path(generated).resolve()
