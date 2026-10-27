@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from collections import deque
 from pathlib import Path
@@ -135,6 +136,19 @@ def create_app(
     # 放進去會造成訓練/推論不一致，且上一則判錯會連帶影響下一則）。
     room_history: deque[dict[str, str]] = deque(
         maxlen=max(inference_config.ERC_HISTORY_TURNS, 1))
+    # 聊天室錄製（VMS_CHAT_RECORD）：每次啟動算一個 session，供之後切成對話建測試集
+    record_path = inference_config.CHAT_RECORD_PATH
+    record_session = time.strftime("%Y%m%d-%H%M%S")
+
+    def record_message(speaker: str, text: str) -> None:
+        if record_path is None:
+            return
+        record_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(record_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"session": record_session, "ts": time.time(),
+                                "speaker": speaker, "text": text},
+                               ensure_ascii=False) + "\n")
+
     last_context: dict[str, tuple[str, str, float]] = {}
     feedback_contexts: dict[tuple[str, str], tuple[str, str, float]] = {}
     # 按需解釋：msg_id → 判讀當下的語境快照（任何人都能對任一則訊息按「為什麼？」）。
@@ -243,6 +257,7 @@ def create_app(
                 context_turns = (list(room_history)
                                  if inference_config.ERC_HISTORY_TURNS else [])
                 room_history.append({"role": client_name, "content": text})
+                record_message(client_name, text)
 
                 try:
                     analysis = await pipeline_service.analyze(

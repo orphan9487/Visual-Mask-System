@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>聊天情緒標註</title>
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #e2e0db;
+  --accent: #2f6fdb; --accent-ink: #ffffff; --target: #fff4d6; --chosen: #2f6fdb;
+  --ok: #2e7d4f; --warn: #b26a00;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161618; --panel: #1f1f22; --ink: #ececee; --muted: #9a9aa0; --line: #333338;
+    --accent: #6a9cff; --accent-ink: #0e0e10; --target: #3a3220; --chosen: #6a9cff;
+    --ok: #6cc28f; --warn: #e0a24a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161618; --panel: #1f1f22; --ink: #ececee; --muted: #9a9aa0; --line: #333338;
+  --accent: #6a9cff; --accent-ink: #0e0e10; --target: #3a3220; --chosen: #6a9cff;
+  --ok: #6cc28f; --warn: #e0a24a;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.6 system-ui, "Noto Sans TC", "Microsoft JhengHei", sans-serif; }
+main { max-width: 820px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 20px; margin: 4px 0 12px; }
+.bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.bar input[type=text] { padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: var(--ink); font: inherit; width: 140px; }
+button, .filebtn { font: inherit; padding: 6px 12px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+button:disabled { opacity: .4; cursor: default; }
+.filebtn input { display: none; }
+.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+.progress { color: var(--muted); font-size: 14px; }
+.meter { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin: 6px 0 12px; }
+.meter > div { height: 100%; background: var(--ok); width: 0; }
+.ctx { max-height: 42vh; overflow-y: auto; font-size: 15px; }
+.turn { padding: 3px 8px; border-radius: 6px; }
+.turn .who { color: var(--muted); font-weight: 600; margin-right: 6px; }
+.turn.opening { color: var(--muted); border-left: 3px solid var(--line); margin-bottom: 4px; }
+.turn.target { background: var(--target); font-size: 18px; padding: 10px; margin-top: 6px; }
+.empty { color: var(--muted); font-style: italic; }
+.labels { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin: 14px 0 10px; }
+.labels button { text-align: left; padding: 8px 10px; }
+.labels button .k { display: inline-block; width: 1.4em; color: var(--muted); }
+.labels button small { display: block; color: var(--muted); font-size: 12px; line-height: 1.3; }
+.labels button.on { background: var(--chosen); color: var(--accent-ink); border-color: var(--chosen); }
+.labels button.on .k, .labels button.on small { color: inherit; }
+.flags { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 10px; }
+.nav { display: flex; gap: 8px; flex-wrap: wrap; }
+details { margin-top: 14px; }
+details summary { cursor: pointer; color: var(--accent); }
+.guide li { margin-bottom: 4px; }
+.note { color: var(--warn); font-size: 14px; }
+.hidden { display: none; }
+@media (max-width: 520px) { .labels { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>聊天情緒標註</h1>
+  <div class="bar">
+    <label>標註者 <input id="who" type="text" placeholder="你的名字"></label>
+    <label class="filebtn">載入題目 items.jsonl<input id="itemsFile" type="file" accept=".jsonl,.json"></label>
+    <label class="filebtn">匯入先前標註<input id="labelsFile" type="file" accept=".json"></label>
+    <button id="export" class="primary" disabled>匯出標註</button>
+  </div>
+  <p id="status" class="note"></p>
+
+  <div id="work" class="hidden">
+    <div class="progress"><span id="pos"></span>　已標 <span id="done"></span></div>
+    <div class="meter"><div id="meterFill"></div></div>
+    <div class="panel">
+      <div id="ctx" class="ctx"></div>
+      <div id="labels" class="labels"></div>
+      <div class="flags">
+        <label><input id="sarcasm" type="checkbox"> 反話／反諷（S）</label>
+        <label><input id="unsure" type="checkbox"> 不太確定（U）</label>
+      </div>
+      <div class="nav">
+        <button id="prev">← 上一則</button>
+        <button id="next">下一則 →</button>
+        <button id="nextTodo">跳到下一則未標（N）</button>
+      </div>
+    </div>
+  </div>
+
+  <details open>
+    <summary>標註說明（開始前請讀一遍）</summary>
+    <ul class="guide">
+      <li>判斷<b>說話者在說這句話當下</b>的情緒。只看前文，不看後面的發展。</li>
+      <li>反話照<b>真正的情緒</b>標，再勾「反話／反諷」。例：對方把你的檔案刪了，你回「真好啊」→ 標憤怒或厭惡，勾反諷。</li>
+      <li>單純陳述、詢問、打招呼、沒有明顯情緒 → 中性。不要為了「有情緒」硬標。</li>
+      <li>兩種都說得通時，挑你覺得最主要的那個，並勾「不太確定」。</li>
+      <li>自己獨立判斷，不要和另一位標註者討論，也不要猜模型會怎麼判。</li>
+      <li>快捷鍵：1–7 選情緒（選完自動到下一則）、S 反諷、U 不確定、← → 換題、N 下一則未標。</li>
+      <li>標註會自動存在這個瀏覽器裡；換電腦或清除瀏覽資料前，請先按「匯出標註」。</li>
+    </ul>
+  </details>
+</main>
+
+<script>
+const LABELS = [
+  ["neutral", "中性", "陳述、詢問、沒有明顯情緒"],
+  ["joy", "開心", "高興、興奮、感謝、得意"],
+  ["sadness", "悲傷", "難過、失落、沮喪、遺憾"],
+  ["anger", "憤怒", "生氣、不爽、指責、煩躁"],
+  ["surprise", "驚訝", "意外、震驚（正負皆可）"],
+  ["fear", "恐懼", "害怕、擔心、焦慮、緊張"],
+  ["disgust", "厭惡", "嫌棄、鄙視、噁心、不屑"],
+];
+const $ = (id) => document.getElementById(id);
+let items = [], allTurns = [], byConv = {}, labels = {}, idx = 0, setHash = "";
+
+function store(key, val) {
+  try { if (val === undefined) return localStorage.getItem(key); localStorage.setItem(key, val); }
+  catch (e) { return null; }
+}
+function hash(s) { let h = 2166136261; for (const c of s) { h ^= c.codePointAt(0); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36); }
+function storageKey() { return `vms-annot:${$("who").value.trim() || "anon"}:${setHash}`; }
+function save() { store(storageKey(), JSON.stringify(labels)); }
+function loadSaved() {
+  const raw = store(storageKey());
+  try { labels = raw ? JSON.parse(raw) : {}; } catch (e) { labels = {}; }
+}
+function setStatus(msg) { $("status").textContent = msg; }
+
+function escapeHtml(s) { return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+function render() {
+  if (!items.length) return;
+  const it = items[idx];
+  const conv = byConv[it.conv];
+  const before = conv.filter((x) => x.turn < it.turn).slice(-20);
+  const ctx = $("ctx");
+  ctx.innerHTML = (before.length ? "" : '<div class="turn empty">（對話開頭，沒有前文）</div>') +
+    before.map((x) => `<div class="turn${x.context_only ? " opening" : ""}"><span class="who">${escapeHtml(x.speaker)}${x.context_only ? "（原文）" : ""}</span>${escapeHtml(x.text)}</div>`).join("") +
+    `<div class="turn target"><span class="who">${escapeHtml(it.speaker)}</span>${escapeHtml(it.text)}</div>`;
+  ctx.scrollTop = ctx.scrollHeight;
+  const cur = labels[it.id] || {};
+  for (const b of $("labels").children) b.classList.toggle("on", b.dataset.label === cur.label);
+  $("sarcasm").checked = !!cur.sarcasm;
+  $("unsure").checked = !!cur.unsure;
+  const n = Object.values(labels).filter((v) => v.label).length;
+  $("pos").textContent = `第 ${idx + 1} / ${items.length} 則（對話 ${it.conv}）`;
+  $("done").textContent = `${n} / ${items.length}`;
+  $("meterFill").style.width = `${(100 * n) / items.length}%`;
+  $("prev").disabled = idx === 0;
+  $("next").disabled = idx === items.length - 1;
+}
+
+function setLabel(label) {
+  const it = items[idx];
+  labels[it.id] = { ...(labels[it.id] || {}), label, t: Date.now() };
+  save();
+  if (idx < items.length - 1) idx++;
+  render();
+}
+function setFlag(flag, value) {
+  const it = items[idx];
+  if (!labels[it.id]) labels[it.id] = {};
+  labels[it.id][flag] = value;
+  save();
+  render();
+}
+function nextTodo(includeCurrent = false) {
+  for (let k = includeCurrent ? 0 : 1; k <= items.length; k++) {
+    const j = (idx + k) % items.length;
+    if (!(labels[items[j].id] || {}).label) { idx = j; render(); return; }
+  }
+  setStatus("全部標完了！記得按「匯出標註」。");
+}
+
+function buildLabelButtons() {
+  $("labels").innerHTML = "";
+  LABELS.forEach(([key, zh, desc], i) => {
+    const b = document.createElement("button");
+    b.dataset.label = key;
+    b.innerHTML = `<span class="k">${i + 1}</span>${zh} <small>${desc}</small>`;
+    b.onclick = () => setLabel(key);
+    $("labels").appendChild(b);
+  });
+}
+
+$("itemsFile").onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  if (!$("who").value.trim()) { setStatus("請先填標註者名字，再載入題目。"); e.target.value = ""; return; }
+  try {
+    allTurns = (await file.text()).split(/\r?\n/).filter((l) => l.trim()).map((l) => JSON.parse(l));
+  } catch (err) { setStatus("題目檔格式錯誤：" + err.message); return; }
+  byConv = {};
+  for (const it of allTurns) (byConv[it.conv] ||= []).push(it);
+  // context_only（如論壇文章本文）只當語境顯示，不列為標註題
+  items = allTurns.filter((x) => !x.context_only);
+  for (const c of Object.values(byConv)) c.sort((a, b) => a.turn - b.turn);
+  setHash = hash(items.map((x) => x.id).join("|"));
+  loadSaved();
+  $("who").disabled = true;
+  $("work").classList.remove("hidden");
+  $("export").disabled = false;
+  idx = 0;
+  setStatus(`已載入 ${items.length} 則（${Object.keys(byConv).length} 段對話）。`);
+  nextTodo(true);
+  render();
+};
+
+$("labelsFile").onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file || !items.length) { setStatus("請先載入題目，再匯入先前的標註。"); return; }
+  try {
+    const d = JSON.parse(await file.text());
+    const known = new Set(items.map((x) => x.id));
+    let n = 0;
+    for (const [k, v] of Object.entries(d.labels || {})) if (known.has(k)) { labels[k] = v; n++; }
+    save(); render();
+    setStatus(`已匯入 ${n} 則標註。`);
+  } catch (err) { setStatus("標註檔格式錯誤：" + err.message); }
+};
+
+$("export").onclick = () => {
+  const who = $("who").value.trim();
+  const blob = new Blob([JSON.stringify({
+    annotator: who, items_hash: setHash, n_items: items.length,
+    exported: new Date().toISOString(), labels,
+  }, null, 1)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `labels_${who}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+$("prev").onclick = () => { if (idx > 0) { idx--; render(); } };
+$("next").onclick = () => { if (idx < items.length - 1) { idx++; render(); } };
+$("nextTodo").onclick = () => nextTodo();
+$("sarcasm").onchange = (e) => setFlag("sarcasm", e.target.checked);
+$("unsure").onchange = (e) => setFlag("unsure", e.target.checked);
+
+document.addEventListener("keydown", (e) => {
+  if (!items.length || e.target.tagName === "INPUT" && e.target.type === "text") return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k >= "1" && k <= "7") setLabel(LABELS[+k - 1][0]);
+  else if (k === "s") setFlag("sarcasm", !(labels[items[idx].id] || {}).sarcasm);
+  else if (k === "u") setFlag("unsure", !(labels[items[idx].id] || {}).unsure);
+  else if (k === "arrowleft") $("prev").click();
+  else if (k === "arrowright") $("next").click();
+  else if (k === "n") nextTodo();
+  else return;
+  e.preventDefault();
+});
+
+buildLabelButtons();
+</script>
+</body>
+</html>

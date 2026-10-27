@@ -48,8 +48,35 @@ class Manager:
             for w in list(self.c[u]):
                 try: await w.send_json(p)
                 except Exception:self.drop(w,u)
+def _record_message(room_id, speaker, text):
+    """聊天室錄製（VMS_CHAT_RECORD，預設關閉）：建真實聊天測試集用，以聊天室 ID 當 session。
+    只在參與者知情同意時開啟；錄製檔屬個資，放 data/chat_testset/（不進 git）。"""
+    path=inference_config.CHAT_RECORD_PATH
+    if path is None:return
+    import time
+    path.parent.mkdir(parents=True,exist_ok=True)
+    with open(path,'a',encoding='utf-8') as f:
+        f.write(json.dumps({'session':room_id,'ts':time.time(),'speaker':speaker,'text':text},ensure_ascii=False)+'\n')
+_FIELD_ZH={'name':'面具名稱','image':'照片','crop_json':'裁切範圍','mode':'處理方式','account':'帳號',
+           'password':'密碼','username':'顯示名稱','correct_label':'情緒標籤','peer_id':'聊天對象','accepted':'確認勾選'}
+def _readable_validation_error(exc):
+    """把 FastAPI 的欄位驗證錯誤（list of dict）轉成一句中文；前端各頁都直接顯示 detail 字串，
+    否則會出現 [object Object]。"""
+    missing,invalid=[],[]
+    for err in exc.errors():
+        field=_FIELD_ZH.get(str(err.get('loc',['',''])[-1]),str(err.get('loc',['',''])[-1]))
+        (missing if err.get('type')=='missing' else invalid).append(field)
+    parts=[]
+    if missing:parts.append('請填寫：'+'、'.join(dict.fromkeys(missing)))
+    if invalid:parts.append('格式不正確：'+'、'.join(dict.fromkeys(invalid)))
+    return '；'.join(parts) or '送出的資料不完整'
 def create_app():
-    app=FastAPI(title='Visual Mask Multi-page Chat'); app.mount('/static',StaticFiles(directory=str(WEB)),name='static');app.mount('/output',StaticFiles(directory=str(OUT)),name='output')
+    app=FastAPI(title='Visual Mask Multi-page Chat')
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.responses import JSONResponse
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(_request,exc):return JSONResponse(status_code=422,content={'detail':_readable_validation_error(exc)})
+    app.mount('/static',StaticFiles(directory=str(WEB)),name='static');app.mount('/output',StaticFiles(directory=str(OUT)),name='output')
     manager=Manager(); histories={}; explain_contexts={}; explanations={}
     for route,page in [('/','login.html'),('/login','login.html'),('/register','register.html'),('/appearance','appearance.html'),('/enroll','masks.html'),('/masks','masks.html'),('/chats','chats.html'),('/chat','chat.html')]:
         app.add_api_route(route,lambda page=page:FileResponse(WEB/page,headers={'Cache-Control':'no-store, max-age=0'}),methods=['GET'])
@@ -170,6 +197,7 @@ def create_app():
                     await asyncio.to_thread(save_message,room_id,u['id'],text,None,None,mid)
                     context = list(history) if inference_config.ERC_HISTORY_TURNS else []
                     history.append({'role':u['username'],'content':text})
+                    await asyncio.to_thread(_record_message,room_id,u['username'],text)
                     if not mask:raise ValueError('請先到面具管理新增並確認一張面具')
                     a=await pipeline.analyze(text,context,user_id=u['username'],mask_id=mask)
                     explain_contexts[mid]={'room_id':room_id,'text':text,'history':a.history,'emotion':a.emotion,'speaker':u['username']}

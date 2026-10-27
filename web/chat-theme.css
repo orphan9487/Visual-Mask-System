@@ -38,3 +38,14 @@ button:focus-visible,a:focus-visible,select:focus-visible{outline:3px solid #9C4
 @media(max-width:720px){.chat-list-body .topbar{padding:16px;gap:10px}.chat-list-body .card{padding:22px;border-radius:22px}.chat-list-body .shell{padding:24px 14px}.conversation-header{min-height:70px}.messages{padding:20px 14px}.message{max-width:92%}}
 @media(prefers-reduced-motion:reduce){button,a,input,textarea,select{transition:none}}
 .feedback-controls{font-size:.8rem}.feedback-controls button{background:#fff9f0;color:#71390f;border:1px solid #956D6480;padding:6px 10px;border-radius:10px;font-size:inherit}.feedback-controls .feedback-toggle{position:absolute;top:9px;right:12px;background:transparent;border:0;box-shadow:none;color:#77554e;font-size:.7rem;font-weight:400;padding:4px 6px}.feedback-controls .feedback-toggle:hover{background:#FEDDB850;color:#9C4C17}.feedback-controls form:not([hidden]){display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.feedback-controls select{background:#fffaf2;color:#71390f;border:1px solid #956D64;border-radius:8px;padding:6px}.feedback-controls small{display:block;margin-top:6px;max-width:320px;color:#71390f}.feedback-controls small:empty{display:none}
+
+/* 按需解釋：按鈕與「判斷有誤？」同款，釘在泡泡右上角；自己的訊息排在它左邊 */
+.explain-controls{display:flex;flex-direction:column;align-items:flex-start;gap:4px;font-size:.8rem}
+.explain-controls .feedback-toggle{position:absolute;top:9px;right:12px;background:transparent;border:0;box-shadow:none;color:#77554e;font-size:.7rem;font-weight:400;padding:4px 6px;border-radius:10px;cursor:pointer}
+.explain-controls .feedback-toggle:hover{background:#FEDDB850;color:#9C4C17}
+.message.mine .explain-controls .feedback-toggle{right:92px}
+.message .message-sender{display:inline-block;min-height:20px;padding-right:150px}
+.message.mine .message-sender{padding-right:230px}
+.explain-text{margin:8px 0 0;padding:8px 10px;border-radius:10px;background:#FEDDB830;color:#71390f;line-height:1.6;white-space:pre-wrap}
+.explain-note{display:block;color:#71390f;opacity:.75;font-size:.7rem}
+.explain-text[hidden],.explain-note[hidden]{display:none}

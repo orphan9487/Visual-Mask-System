@@ -10,4 +10,7 @@ if __name__ == "__main__":
 
     require_session_secret()   # 金鑰不合格就不啟動，避免帶著可偽造的登入上線
 
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    import os
+
+    # 埠號可用 VMS_PORT 調整（部分 Windows 的 8000 埠被系統服務 HTTP.sys 占用）
+    uvicorn.run(app, host="127.0.0.1", port=int(os.getenv("VMS_PORT", "8000")))

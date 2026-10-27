@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Visual Mask 聊天室</title>
   <link rel="stylesheet" href="/static/app.css?v=20261002">
-  <link rel="stylesheet" href="/static/chat-theme.css?v=20261017">
+  <link rel="stylesheet" href="/static/chat-theme.css?v=20261022">
 </head>
 <body class="messenger-body">
   <main class="messenger">
@@ -77,6 +77,28 @@
         };
       }
 
+      // 按需解釋（二階段的第二階段）：任何人都能對已判讀的訊息問「為什麼」。
+      // 只有本次伺服器啟動後判讀的訊息有語境紀錄；說明由模型事後產生，僅供參考。
+      function explainControls(article, message) {
+        const id=message.msg_id||message.id;
+        if (!id || !message.ai_label || article.querySelector('.explain-controls')) return;
+        const box=document.createElement('div');box.className='explain-controls';
+        const ask=document.createElement('button');ask.type='button';ask.className='feedback-toggle';ask.textContent='為什麼判成這個情緒？';
+        const answer=document.createElement('p');answer.className='explain-text';answer.hidden=true;
+        const note=document.createElement('small');note.className='explain-note';note.hidden=true;note.textContent='僅供參考';
+        ask.onclick=async()=>{
+          ask.disabled=true;answer.hidden=false;answer.textContent='產生說明中…';
+          try{
+            const r=await fetch(`/api/chats/${encodeURIComponent(roomId)}/messages/${encodeURIComponent(id)}/explain`,{method:'POST',headers:authHeaders()});
+            const d=await r.json();if(!r.ok)throw Error(d.detail||'無法產生說明');
+            answer.textContent=d.explanation||'（沒有產生說明）';note.hidden=false;ask.hidden=true;
+          }catch(e){answer.textContent=e.message;ask.disabled=false}
+        };
+        box.append(ask,answer,note);
+        const feedback=article.querySelector('.feedback-controls');
+        feedback?article.insertBefore(box,feedback):article.append(box);
+      }
+
       function addMessage(message) {
         function generationStatus(article){
           let note=article.querySelector('.generation-status');
@@ -98,6 +120,7 @@
             const image = document.createElement('img'); image.src = `/output/${encodeURIComponent(message.mask_file)}`; image.alt = '依情緒生成的 FaceID 面具'; image.loading = 'lazy'; article.append(image);
           }
           messages.scrollTop = messages.scrollHeight;
+          explainControls(article,message);
           feedbackControls(article,message);
           return;
         }
@@ -126,6 +149,7 @@
         }
         messages.append(article);
         generationStatus(article);
+        explainControls(article,message);
         feedbackControls(article,message);
         if (messageKey) messageElements.set(messageKey, article);
         messages.scrollTop = messages.scrollHeight;

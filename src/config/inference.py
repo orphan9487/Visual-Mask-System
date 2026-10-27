@@ -51,6 +51,12 @@ if _lora:
 else:
     ERC_LORA_PATH = None
 
+# 聊天室錄製（建真實聊天測試集用，預設關閉）：設成檔案路徑即把每則發言附加寫入 JSONL。
+# 只在受試者知情同意的使用者測試時開啟；錄下的檔案屬個資，放 data/ 下（不進 git）。
+_chat_record = os.getenv("VMS_CHAT_RECORD", "").strip()
+CHAT_RECORD_PATH = (Path(_chat_record) if Path(_chat_record).is_absolute()
+                    else PROJECT_ROOT / _chat_record) if _chat_record else None
+
 # Optional dependency-isolated emotion service. Keeping this URL empty runs
 # Breeze2 in the WebSocket process exactly as before.
 EMOTION_API_URL = os.getenv("VMS_EMOTION_API_URL", "").strip().rstrip("/")

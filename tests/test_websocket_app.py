@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -269,6 +270,29 @@ class WebSocketAppTests(unittest.TestCase):
             "emotion": "disgust",
             "speaker": "bob",
         })
+
+    def test_chat_record_appends_messages_when_enabled(self):
+        """VMS_CHAT_RECORD 有設時，每則發言附加寫入 JSONL（建真實聊天測試集用）。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            record = Path(temp_dir) / "rec" / "recordings.jsonl"
+
+            class FailingPipeline:          # 分析失敗也要先錄到（收到就記）
+                async def analyze(self, text, history, **kwargs):
+                    raise RuntimeError("no model")
+
+            with patch.object(websocket_app.inference_config, "CHAT_RECORD_PATH", record):
+                app = websocket_app.create_app(FailingPipeline())
+            with (
+                patch.object(websocket_app, "get_user_active_lora", return_value="human"),
+                TestClient(app) as client,
+                client.websocket_connect("/ws/alice") as alice,
+            ):
+                alice.send_text("早安")
+                alice.receive_json()
+            rows = [json.loads(l) for l in record.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["speaker"], rows[0]["text"]), ("alice", "早安"))
+        self.assertIn("session", rows[0])
 
     def test_feedback_rejects_unknown_label_and_missing_message(self):
         app = websocket_app.create_app()

@@ -72,3 +72,30 @@ python -m src.annotation.iaa --selftest   # 用 Fleiss 標準例驗證數學
 ## 檔案慣例
 - `_example_pipeline_demo.jsonl`：**僅供管線示範**，含反諷殺手案例。**不是評測 gold**，
   真實對話（=評測尺）另存、需 consent。合成/示範資料絕不當 ground truth。
+
+## 真實聊天測試集（7 類，評估部署模型用）
+
+與上面的產品細層 schema 分開：這裡用部署模型同一套 7 類標籤，目的是量「模型在真實台灣聊天上的表現」與「人類彼此一致度（天花板）」。
+
+1. **收語料**（只收參與者知情同意的對話，檔案放 `data/chat_testset/`，不進 git）
+   - 聊天室錄製：`.env` 設 `VMS_CHAT_RECORD=data/chat_testset/recordings.jsonl` 後啟動聊天室，每則發言會被記下
+   - 或純文字逐字稿：每行 `名字：內容`，空行或 `---` 分隔不同對話
+2. **整理**：`python -m src.annotation.chat_testset build --record data/chat_testset/recordings.jsonl --txt "data/chat_testset/raw/*.txt"`
+   發話者自動匿名成 A/B/C，電話/email/網址/身分證字號自動遮蔽；發出前仍要人工瀏覽一遍
+3. **標註**：兩人各自用瀏覽器開 `src/annotation/chat_annotator.html`，載入 `items.jsonl`，標完匯出 `labels_<名字>.json`（互不討論）
+4. **一致度＋分歧清單**：`python -m src.annotation.chat_testset agree data/chat_testset/labels_*.json --adjudicate data/chat_testset/adjudicate.jsonl`
+   兩人討論分歧題，在 `final` 欄填最後的標籤
+5. **合併 gold**：`python -m src.annotation.chat_testset gold data/chat_testset/labels_*.json --adjudicate data/chat_testset/adjudicate.jsonl`
+6. **評估模型**：`python -m src.evaluation.eval_chat_testset --annotators data/chat_testset/labels_*.json`
+   與上線設定相同（單次打分＋先驗校正＋20 句語境），並列出模型 vs 人、人 vs 人的 κ
+
+建議規模：300–500 則（約 30–50 段對話）。少於 200 則時 CI 會很寬，只能看大方向。
+
+### 論壇補充子集（PTT 推文，主要測反諷／酸文）
+
+- 抓取：`python -m src.annotation.ptt_crawler --out data/chat_testset/forum_raw.jsonl`（預設 Boy-Girl、WomenTalk、marriage、Tech_Job、joke，每板 6 篇、每篇最多 15 則推文）
+  - 只抓公開看板；需要年齡確認的看板（如 Gossiping）自動跳過；請求間隔至少 1 秒
+  - 純附和的推文（「推」「+1」）不收；推／噓標記不交給標註者與模型
+- 整理：`python -m src.annotation.chat_testset build --forum data/chat_testset/forum_raw.jsonl --out data/chat_testset/forum_items.jsonl`
+  - 文章標題＋內文只當語境（標註頁顯示「原文」），標註對象是推文；帳號與內文提到的帳號都換成代號
+- 論壇和聊天是不同領域，**分開評估、分開報告**，不要合成同一個分數
