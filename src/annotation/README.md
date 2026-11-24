@@ -82,12 +82,16 @@ python -m src.annotation.iaa --selftest   # 用 Fleiss 標準例驗證數學
    - 或純文字逐字稿：每行 `名字：內容`，空行或 `---` 分隔不同對話
 2. **整理**：`python -m src.annotation.chat_testset build --record data/chat_testset/recordings.jsonl --txt "data/chat_testset/raw/*.txt"`
    發話者自動匿名成 A/B/C，電話/email/網址/身分證字號自動遮蔽；發出前仍要人工瀏覽一遍
-3. **標註**：兩人各自用瀏覽器開 `src/annotation/chat_annotator.html`，載入 `items.jsonl`，標完匯出 `labels_<名字>.json`（互不討論）
+3. **標註**：先讀 [標註準則](annotation_guidelines.md)，用 `sample` 抽約 30 則試標、確認 κ 後再正式標。兩人各自用瀏覽器開 `src/annotation/chat_annotator.html`，載入 `items.jsonl`，標完匯出 `labels_<名字>.json`（互不討論）
 4. **一致度＋分歧清單**：`python -m src.annotation.chat_testset agree data/chat_testset/labels_*.json --adjudicate data/chat_testset/adjudicate.jsonl`
-   兩人討論分歧題，在 `final` 欄填最後的標籤
+   兩人討論分歧題，在 `final` 欄填最後的標籤。用 Excel 討論較方便：
+   `python -m src.annotation.adjudicate_excel export data/chat_testset/adjudicate.jsonl --labels data/chat_testset/labels_*.json --out data/chat_testset/裁決表.xlsx`，
+   填完再 `python -m src.annotation.adjudicate_excel import data/chat_testset/裁決表.xlsx --adjudicate data/chat_testset/adjudicate.jsonl` 寫回
 5. **合併 gold**：`python -m src.annotation.chat_testset gold data/chat_testset/labels_*.json --adjudicate data/chat_testset/adjudicate.jsonl`
 6. **評估模型**：`python -m src.evaluation.eval_chat_testset --annotators data/chat_testset/labels_*.json`
    與上線設定相同（單次打分＋先驗校正＋20 句語境），並列出模型 vs 人、人 vs 人的 κ
+   - 反諷子集與非反諷並排：準確率（95% CI）、正負方向正確率、被字面騙成「開心」的比例、判成中性的比例；另列兩位標註者對「是否反諷」勾選的 κ
+   - 分數快取與報告依 `--items` 檔名命名（如 `forum_items_model_scores.jsonl`）：聊天與論壇題號格式相同，不可共用快取
 
 建議規模：300–500 則（約 30–50 段對話）。少於 200 則時 CI 會很寬，只能看大方向。
 
@@ -98,4 +102,8 @@ python -m src.annotation.iaa --selftest   # 用 Fleiss 標準例驗證數學
   - 純附和的推文（「推」「+1」）不收；推／噓標記不交給標註者與模型
 - 整理：`python -m src.annotation.chat_testset build --forum data/chat_testset/forum_raw.jsonl --out data/chat_testset/forum_items.jsonl`
   - 文章標題＋內文只當語境（標註頁顯示「原文」），標註對象是推文；帳號與內文提到的帳號都換成代號
+- 標註、裁決與評估（全部加上論壇的檔名）：
+  - `python -m src.annotation.chat_testset agree data/chat_testset/forum_labels_*.json --items data/chat_testset/forum_items.jsonl --adjudicate data/chat_testset/forum_adjudicate.jsonl`
+  - `python -m src.annotation.chat_testset gold data/chat_testset/forum_labels_*.json --adjudicate data/chat_testset/forum_adjudicate.jsonl --out data/chat_testset/forum_gold.jsonl`
+  - `python -m src.evaluation.eval_chat_testset --items data/chat_testset/forum_items.jsonl --gold data/chat_testset/forum_gold.jsonl --annotators data/chat_testset/forum_labels_*.json`
 - 論壇和聊天是不同領域，**分開評估、分開報告**，不要合成同一個分數

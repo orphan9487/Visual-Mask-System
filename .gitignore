@@ -84,6 +84,8 @@ data/erc_sft/
 data/cped/
 data/m3ed/
 data/chat_testset/
+# 大模型標註的訓練語料（PTT 推文，含使用者發言，勿提交）
+data/llm_silver/
 # 執行期使用者對話記錄（含個資）
 data/*.db
 *.tfevents.*

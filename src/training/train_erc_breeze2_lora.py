@@ -272,6 +272,14 @@ def main():
         raw = raw[:args.limit]
     tok_fn = build_tokenize_fn(tokenizer, MRPromptV3(), args.max_len)
     dataset = [tok_fn(s) for s in raw]
+    # 超過 max_len 時從尾端截斷，答案標籤可能整段被切掉 → 該樣本 loss 為 nan、完全沒學到。
+    # 寧可排除並警告，也不要讓訓練默默只學到一部分資料。
+    dead = [i for i, d in enumerate(dataset) if all(x == IGNORE for x in d["labels"])]
+    if dead:
+        print(f"[train] 警告：{len(dead)}／{len(dataset)} 筆樣本超過 max_len={args.max_len}，"
+              f"答案被截掉，已排除（請縮短前文或調高 --max_len）", flush=True)
+        dead_set = set(dead)
+        dataset = [d for i, d in enumerate(dataset) if i not in dead_set]
     print(f"[train] 訓練樣本：{len(dataset)}")
 
     collate = Collator(tokenizer.pad_token_id)

@@ -131,8 +131,17 @@ def parse_article(page: str, max_body_chars: int) -> dict | None:
     return {"title": title, "turns": turns}
 
 
+def load_exclude(paths) -> set[str]:
+    """已用過的文章網址（例如測試集的 forum_raw.jsonl），新爬的語料不得與之重疊。"""
+    urls = set()
+    for p in paths or []:
+        with open(p, encoding="utf-8") as f:
+            urls |= {json.loads(line)["url"] for line in f if line.strip()}
+    return urls
+
+
 def crawl(boards, articles_per_board, max_turns, min_turns, max_body_chars, delay,
-          max_pages, seed):
+          max_pages, seed, exclude=frozenset()):
     fetch = Fetcher(delay)
     rng = random.Random(seed)
     out = []
@@ -149,7 +158,8 @@ def crawl(boards, articles_per_board, max_turns, min_turns, max_body_chars, dela
         candidates, prev = [], None
         for p in range(max_pages):
             links, prev = parse_index(page)
-            candidates += [(h, t) for h, t in links if not _SKIP_TITLES.search(t)]
+            candidates += [(h, t) for h, t in links
+                           if not _SKIP_TITLES.search(t) and BASE + h not in exclude]
             if prev is None or p == max_pages - 1:
                 break
             page = fetch.get(f"/bbs/{board}/index{prev}.html")
@@ -185,11 +195,15 @@ def main(argv=None):
     ap.add_argument("--delay", type=float, default=1.5, help="請求間隔秒數（不得低於 1）")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="data/chat_testset/forum_raw.jsonl")
+    ap.add_argument("--exclude", nargs="*", help="不得重複抓取的文章清單（如測試集的 forum_raw.jsonl）")
     args = ap.parse_args(argv)
     if args.delay < 1:
         ap.error("--delay 不得低於 1 秒")
+    exclude = load_exclude(args.exclude)
+    if exclude:
+        print(f"[ptt] 排除已用過的文章 {len(exclude)} 篇")
     arts = crawl(args.boards, args.articles_per_board, args.max_turns, args.min_turns,
-                 args.max_body_chars, args.delay, args.max_pages, args.seed)
+                 args.max_body_chars, args.delay, args.max_pages, args.seed, exclude)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
         for a in arts:

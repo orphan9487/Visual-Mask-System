@@ -80,6 +80,52 @@ def score_items(items, wanted, lora, history_turns, cache_path) -> dict[str, lis
     return cache
 
 
+# 反諷的關鍵是「方向」：真心開心與反話的開心字面一樣，判對方向才算看懂語境
+VALENCE = {"joy": "正面", "sadness": "負面", "anger": "負面", "fear": "負面", "disgust": "負面",
+           "neutral": "中性", "surprise": "驚訝"}
+
+
+def sarcasm_breakdown(gold, sarc, pred) -> dict:
+    """反諷子集與非反諷子集並排：準確率（含 CI）、正負方向正確率、
+    被字面騙成「開心」的比例（gold 不是 joy 卻判 joy），以及被判成中性的比例。"""
+    gold, sarc, pred = np.array(gold), np.array(sarc, dtype=bool), np.array(pred)
+    out = {}
+    for name, mask in (("反諷", sarc), ("非反諷", ~sarc)):
+        g, p = gold[mask], pred[mask]
+        if len(g) == 0:
+            continue
+        direction = np.array([VALENCE[a] == VALENCE[b] for a, b in zip(g, p)])
+        not_joy = g != "joy"
+        out[name] = {
+            "n": int(len(g)),
+            "acc": float(np.mean(g == p)),
+            "acc_ci": bootstrap_ci(lambda idx: float(np.mean(g[idx] == p[idx])), len(g)),
+            "direction_acc": float(direction.mean()),
+            "literal_joy_rate": float(np.mean(p[not_joy] == "joy")) if not_joy.any() else float("nan"),
+            "neutral_rate": float(np.mean(p == "neutral")),
+            "gold_dist": dict(Counter(g.tolist())),
+        }
+    return out
+
+
+def flag_kappa(a: list[bool], b: list[bool]) -> float:
+    """兩位標註者對「是否反諷」勾選的 Cohen's κ（二元）。"""
+    n = len(a)
+    if n == 0:
+        return float("nan")
+    po = sum(x == y for x, y in zip(a, b)) / n
+    pa, pb = sum(a) / n, sum(b) / n
+    pe = pa * pb + (1 - pa) * (1 - pb)
+    return float("nan") if pe == 1 else (po - pe) / (1 - pe)
+
+
+def default_paths(items_path: str) -> tuple[str, str]:
+    """分數快取與報告依測試集檔名命名：聊天與論壇題號格式相同，共用快取會互相污染。"""
+    p = Path(items_path)
+    return (str(p.with_name(f"{p.stem}_model_scores.jsonl")),
+            str(p.with_name(f"{p.stem}_eval_report.json")))
+
+
 def metrics(gold, pred) -> dict:
     # Macro 只平均 gold 裡出現過的類別：小測試集常缺某些類（如 fear），算進去會被當 0 拉低
     present = [k for k in L if k in set(gold)]
@@ -111,9 +157,13 @@ def main():
     ap.add_argument("--lora", default=None, help="預設＝校正檔記錄的 adapter（即上線版本）")
     ap.add_argument("--alpha", type=float, default=None, help="預設＝校正檔的 alpha")
     ap.add_argument("--history_turns", type=int, default=20)
-    ap.add_argument("--scores", default="data/chat_testset/model_scores.jsonl")
-    ap.add_argument("--out", default="data/chat_testset/eval_report.json")
+    ap.add_argument("--scores", default=None,
+                    help="模型分數快取；預設依 --items 檔名命名（聊天與論壇的題號格式相同，不可共用）")
+    ap.add_argument("--out", default=None, help="預設依 --items 檔名命名")
     args = ap.parse_args()
+    scores_default, out_default = default_paths(args.items)
+    args.scores = args.scores or scores_default
+    args.out = args.out or out_default
 
     cal = json.loads(Path(args.calib).read_text(encoding="utf-8"))
     lora = args.lora or str(PROJECT_ROOT / "models" / cal["adapter"])
@@ -156,12 +206,21 @@ def main():
         for k, pi, ri, fi, si in zip(L, p, r, f, s):
             print(f"    {k:<10}{pi:>7.2f}{ri:>7.2f}{fi:>7.2f}{si:>7}")
         print_confusion(confusion(y, cal_pred), "gold", "模型")
-        sarc = [i for i in ids if gold[i].get("sarcasm")]
-        if sarc:
-            sp = predict(sarc)
-            acc = sum(a == gold[i]["label"] for a, i in zip(sp, sarc)) / len(sarc)
-            print(f"\n  反諷子集 {len(sarc)} 則：準確率 {acc:.3f}")
-            report["sarcasm"] = {"n": len(sarc), "acc": acc}
+        flags = [bool(gold[i].get("sarcasm")) for i in ids]
+        if any(flags):
+            print("\n=== 反諷子集 vs 非反諷（上線設定）===")
+            report["sarcasm"] = {}
+            for tag, pr in (("上線設定", cal_pred), ("未校正", predict(ids, use_bias=False))):
+                rep = sarcasm_breakdown(y, flags, pr)
+                report["sarcasm"][tag] = rep
+                if tag != "上線設定":
+                    continue
+                for name, sub in rep.items():
+                    print(f"  {name:<4} n={sub['n']:<4} 準確率 {sub['acc']:.3f} "
+                          f"[{sub['acc_ci'][0]:.3f}–{sub['acc_ci'][1]:.3f}]  方向正確 {sub['direction_acc']:.3f}  "
+                          f"被字面騙成開心 {sub['literal_joy_rate']:.3f}  判成中性 {sub['neutral_rate']:.3f}")
+            print(f"  未校正的反諷準確率："
+                  f"{report['sarcasm']['未校正'].get('反諷', {}).get('acc', float('nan')):.3f}")
         report.update({"n_gold": len(ids), "majority": base, "raw": raw, "calibrated": calm,
                        "per_class": {k: {"p": float(pi), "r": float(ri), "f1": float(fi),
                                          "support": int(si)}
@@ -183,6 +242,20 @@ def main():
         for r in rows:
             print(f"  {r['pair']:<24} n={r['n']:<5} κ = {r['kappa']:.3f}（{interpret_kappa(r['kappa'])}）")
         report["kappa"] = rows
+        # 人對「這句是不是反諷」本身的一致度：一致度低時，反諷準確率也要保守解讀
+        sarc_rows = []
+        for i in range(len(named)):
+            for j in range(i + 1, len(named)):
+                (na, la), (nb, lb) = named[i], named[j]
+                common = sorted(set(la) & set(lb))
+                fa = [bool(la[c].get("sarcasm")) for c in common]
+                fb = [bool(lb[c].get("sarcasm")) for c in common]
+                k = flag_kappa(fa, fb)
+                sarc_rows.append({"pair": f"{na} vs {nb}", "n": len(common), "kappa": k,
+                                  "flagged": [sum(fa), sum(fb)]})
+                print(f"  反諷勾選 {na} vs {nb}：各勾 {sum(fa)}／{sum(fb)} 則，"
+                      f"κ = {k:.3f}（{interpret_kappa(k)}）")
+        report["sarcasm_flag_kappa"] = sarc_rows
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(report, ensure_ascii=False, indent=2, default=float),

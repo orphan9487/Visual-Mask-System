@@ -92,5 +92,53 @@ class AgreementTests(unittest.TestCase):
         self.assertEqual(stats["只有一人標"], 1)
 
 
+class SampleTests(unittest.TestCase):
+
+    def test_sample_keeps_whole_conversations(self):
+        items = []
+        for c in range(6):
+            items.append({"id": f"c{c}-t0", "conv": f"c{c}", "text": "原文", "context_only": True})
+            items += [{"id": f"c{c}-t{t}", "conv": f"c{c}", "text": "x"} for t in range(1, 6)]
+        out = ct.sample_conversations(items, n=8, seed=0)
+        convs = {it["conv"] for it in out}
+        self.assertEqual(len(convs), 2)                       # 每段 5 題 → 抽 2 段才 ≥ 8
+        for c in convs:                                       # 整段保留，含只當語境的原文
+            self.assertEqual(sum(it["conv"] == c for it in out), 6)
+
+
+class SarcasmReportTests(unittest.TestCase):
+
+    def test_breakdown_separates_subsets_and_catches_literal_reading(self):
+        from src.evaluation.eval_chat_testset import sarcasm_breakdown
+        gold = ["anger", "anger", "sadness", "joy", "neutral"]
+        sarc = [True, True, True, False, False]
+        pred = ["anger", "joy", "anger", "joy", "joy"]
+        rep = sarcasm_breakdown(gold, sarc, pred)
+        s = rep["反諷"]
+        self.assertEqual(s["n"], 3)
+        self.assertAlmostEqual(s["acc"], 1 / 3)
+        self.assertAlmostEqual(s["direction_acc"], 2 / 3)     # 悲傷判成憤怒：類別錯、方向對
+        self.assertAlmostEqual(s["literal_joy_rate"], 1 / 3)  # 反話被字面騙成開心
+        self.assertEqual(rep["非反諷"]["n"], 2)
+        self.assertAlmostEqual(rep["非反諷"]["literal_joy_rate"], 1.0)
+
+    def test_flag_kappa(self):
+        from src.evaluation.eval_chat_testset import flag_kappa
+        self.assertAlmostEqual(flag_kappa([True, False, True, False], [True, False, True, False]), 1.0)
+        self.assertAlmostEqual(flag_kappa([True, True, False, False], [True, False, True, False]), 0.0)
+
+
+class EvalPathTests(unittest.TestCase):
+
+    def test_score_cache_named_after_items(self):
+        # 聊天與論壇題號格式相同（c001-t000），快取共用會拿到另一個測試集的分數
+        from src.evaluation.eval_chat_testset import default_paths
+        chat = default_paths("data/chat_testset/items.jsonl")
+        forum = default_paths("data/chat_testset/forum_items.jsonl")
+        self.assertNotEqual(chat[0], forum[0])
+        self.assertTrue(forum[0].endswith("forum_items_model_scores.jsonl"))
+        self.assertTrue(forum[1].endswith("forum_items_eval_report.json"))
+
+
 if __name__ == "__main__":
     unittest.main()

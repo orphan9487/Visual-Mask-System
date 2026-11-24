@@ -98,6 +98,7 @@ details summary { cursor: pointer; color: var(--accent); }
       <li>單純陳述、詢問、打招呼、沒有明顯情緒 → 中性。不要為了「有情緒」硬標。</li>
       <li>兩種都說得通時，挑你覺得最主要的那個，並勾「不太確定」。</li>
       <li>自己獨立判斷，不要和另一位標註者討論，也不要猜模型會怎麼判。</li>
+      <li>易混淆的情況（憤怒或厭惡、悲傷或恐懼、互嗆開玩笑等）依《標註準則》（src/annotation/annotation_guidelines.md）判斷。</li>
       <li>快捷鍵：1–7 選情緒（選完自動到下一則）、S 反諷、U 不確定、← → 換題、N 下一則未標。</li>
       <li>標註會自動存在這個瀏覽器裡；換電腦或清除瀏覽資料前，請先按「匯出標註」。</li>
     </ul>
@@ -115,7 +116,7 @@ const LABELS = [
   ["disgust", "厭惡", "嫌棄、鄙視、噁心、不屑"],
 ];
 const $ = (id) => document.getElementById(id);
-let items = [], allTurns = [], byConv = {}, labels = {}, idx = 0, setHash = "";
+let items = [], allTurns = [], byConv = {}, labels = {}, idx = 0, setHash = "", setPrefix = "";
 
 function store(key, val) {
   try { if (val === undefined) return localStorage.getItem(key); localStorage.setItem(key, val); }
@@ -200,6 +201,8 @@ $("itemsFile").onchange = async (e) => {
   items = allTurns.filter((x) => !x.context_only);
   for (const c of Object.values(byConv)) c.sort((a, b) => a.turn - b.turn);
   setHash = hash(items.map((x) => x.id).join("|"));
+  // 匯出檔名跟著題目檔：forum_items → forum_labels_、pilot_items → pilot_labels_，避免不同測試集撞名
+  setPrefix = (file.name.match(/^(.*?)items/i) || ["", ""])[1];
   loadSaved();
   $("who").disabled = true;
   $("work").classList.remove("hidden");
@@ -231,7 +234,7 @@ $("export").onclick = () => {
   }, null, 1)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `labels_${who}.json`;
+  a.download = `${setPrefix}labels_${who}.json`;
   a.click();
   URL.revokeObjectURL(a.href);
 };

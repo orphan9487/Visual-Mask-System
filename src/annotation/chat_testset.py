@@ -377,6 +377,34 @@ def _cmd_gold(args) -> None:
           f"　反諷 {sum(g['sarcasm'] for g in gold)} 則")
 
 
+def sample_conversations(items: list[dict], n: int, seed: int = 0) -> list[dict]:
+    """試標用：隨機抽整段對話，直到待標題數 ≥ n。整段保留，標註時語境才完整。"""
+    convs: dict[str, list[dict]] = {}
+    for it in items:
+        convs.setdefault(it["conv"], []).append(it)
+    order = sorted(convs)
+    np.random.default_rng(seed).shuffle(order)
+    picked, count = [], 0
+    for c in order:
+        if count >= n:
+            break
+        picked.append(c)
+        count += sum(not it.get("context_only") for it in convs[c])
+    keep = set(picked)
+    return [it for it in items if it["conv"] in keep]
+
+
+def _cmd_sample(args) -> None:
+    items = load_items(args.items)
+    out = sample_conversations(items, args.n, args.seed)
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    with open(args.out, "w", encoding="utf-8") as f:
+        for it in out:
+            f.write(json.dumps(it, ensure_ascii=False) + "\n")
+    n_task = sum(not it.get("context_only") for it in out)
+    print(f"[sample] {len({it['conv'] for it in out})} 段對話、待標 {n_task} 則 → {args.out}")
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -403,6 +431,13 @@ def main(argv=None) -> None:
     g.add_argument("--adjudicate", help="填好 final 的分歧清單")
     g.add_argument("--out", default="data/chat_testset/gold.jsonl")
     g.set_defaults(fn=_cmd_gold)
+
+    s = sub.add_parser("sample", help="抽整段對話做試標（校準標註準則用）")
+    s.add_argument("--items", default="data/chat_testset/items.jsonl")
+    s.add_argument("--n", type=int, default=30, help="至少要有幾則待標題")
+    s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--out", default="data/chat_testset/pilot_items.jsonl")
+    s.set_defaults(fn=_cmd_sample)
 
     args = ap.parse_args(argv)
     if args.cmd in ("agree", "gold"):
